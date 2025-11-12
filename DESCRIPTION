@@ -1,0 +1,39 @@
+Package: OMOPCancerIndicators
+Type: Package
+Title: Breast Cancer Cohort Generation and Diagnostics using OMOP CDM
+Version: 0.1.0
+Authors@R: 
+  person("Maaike", "van Swieten", 
+         email = "m.vanswieten@iknl.nl", 
+         role = c("aut", "cre"))
+Description:
+  This package automates the creation, generation, and diagnostic evaluation of
+  breast cancer cohorts in OMOP CDM databases using the OHDSI tool stack.
+  It supports creation of cohort definition sets based on malignant breast cancer
+  diagnoses, with AJCC/UICC 8th Edition stage and receptor status (ER, PR, HER2)
+  within ±N days of diagnosis
+License: Apache License 2.0
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.1)
+Imports:
+    DatabaseConnector,
+    SqlRender,
+    CohortGenerator,
+    CohortDiagnostics,
+    ParallelLogger,
+    dplyr,
+    readr,
+    magrittr
+Remotes:
+    OHDSI/DatabaseConnector,
+    OHDSI/SqlRender,
+    OHDSI/CohortGenerator,
+    OHDSI/CohortDiagnostics
+Suggests:
+    devtools,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3

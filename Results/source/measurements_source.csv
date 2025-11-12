@@ -1,0 +1,10 @@
+cancer_type,receptor,status,n,percent
+Breast,ER,Negative,0,0
+Breast,ER,Positive,0,0
+Breast,ER,Unknown,0,0
+Breast,HER2,Negative,0,0
+Breast,HER2,Positive,0,0
+Breast,HER2,Unknown,0,0
+Breast,PR,Negative,0,0
+Breast,PR,Positive,0,0
+Breast,PR,Unknown,0,0

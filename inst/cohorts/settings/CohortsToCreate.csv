@@ -1,0 +1,13 @@
+cohort_id,cohort_name
+1,Breast_all
+2,Breast_stage0
+3,Breast_stage1
+4,Breast_stage2
+5,Breast_stage3
+6,Breast_stage4
+7,Breast_ER_Positive
+8,Breast_ER_Negative
+9,Breast_PR_Positive
+10,Breast_PR_Negative
+11,Breast_HER2_Positive
+12,Breast_HER2_Negative
