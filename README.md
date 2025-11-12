@@ -22,7 +22,7 @@ This package facilitates reproducible cancer cohort creation, including **stage-
 
 ---
 
-## 🔹 Folder Structure
+## Folder Structure
 
 ```
 OMOPCancerIndicators/
@@ -171,3 +171,4 @@ For questions:
 **Maaike van Swieten**  
 📧 m.vanswieten@iknl.nl
 🔗 GitHub: [MaaikevS](https://github.com/MaaikevS)
+
