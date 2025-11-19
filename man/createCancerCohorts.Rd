@@ -8,6 +8,7 @@ createCancerCohorts(
   cdmDatabaseSchema,
   cohortDatabaseSchema,
   cohortTable,
+  connectionDetails,
   year,
   gender,
   diagnosis_config = "inst/settings/cancer_diagnosis.json",
@@ -23,6 +24,8 @@ createCancerCohorts(
 \item{cohortDatabaseSchema}{Character. Target schema for cohort table.}
 
 \item{cohortTable}{Character. Name of the cohort table.}
+
+\item{connectionDetails}{DatabaseConnector connection details object.}
 
 \item{year}{Integer. Diagnosis year.}
 
