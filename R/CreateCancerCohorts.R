@@ -16,6 +16,7 @@
 #'
 #' @return List with cohortSql and cohortDefinitionSet.
 #' @export
+
 createCancerCohorts <- function(
     cdmDatabaseSchema,
     cohortDatabaseSchema,
@@ -33,37 +34,85 @@ createCancerCohorts <- function(
   library(CohortGenerator)
   library(jsonlite)
   library(glue)
-  
-  # -----------------------------
-  # Load configurations
-  # -----------------------------
+
+  # ----------------------------------------------------------------------
+  # Helper function to create YEAR() expression for different DBMS
+  # ----------------------------------------------------------------------
+  getYearExpr <- function(connectionDetails, alias = "co") {
+    expr <- switch(
+      tolower(connectionDetails$dbms),
+      "postgresql" = "EXTRACT(YEAR FROM {alias}.condition_start_date)",
+      "redshift"   = "EXTRACT(YEAR FROM {alias}.condition_start_date)",
+      "sql server" = "YEAR({alias}.condition_start_date)",
+      "pdw"        = "YEAR({alias}.condition_start_date)",
+      "oracle"     = "EXTRACT(YEAR FROM {alias}.condition_start_date)",
+      stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
+    )
+    gsub("\\{alias\\}", alias, expr)
+  }
+
+  # For measurement join referencing co2.*
+  getYearExprMeasurement <- function(connectionDetails) {
+    getYearExpr(connectionDetails, alias = "co2")
+  }
+
+
+  # ----------------------------------------------------------------------
+  # Helper function to create stage measurement join
+  # ----------------------------------------------------------------------
+  makeStageMeasurementJoin <- function(year_expr_measurement,
+                                       general_sql,
+                                       clinical_sql,
+                                       pathological_sql) {
+    glue("
+      LEFT JOIN (
+          SELECT 
+              m.person_id,
+              m.measurement_date,
+              m.measurement_concept_id
+          FROM @cdm_database_schema.measurement m
+          JOIN @cdm_database_schema.condition_occurrence co2
+            ON m.person_id = co2.person_id
+           AND m.measurement_event_id = co2.condition_occurrence_id
+          JOIN (
+              SELECT descendant_concept_id AS measurement_concept_id
+              FROM @cdm_database_schema.concept_ancestor
+              WHERE ancestor_concept_id IN ({general_sql})
+                AND descendant_concept_id NOT IN (
+                  SELECT descendant_concept_id
+                  FROM @cdm_database_schema.concept_ancestor
+                  WHERE ancestor_concept_id IN ({clinical_sql}, {pathological_sql})
+                )
+          ) allowed
+            ON allowed.measurement_concept_id = m.measurement_concept_id
+          WHERE {year_expr_measurement} IN (@year)
+      ) m
+        ON m.person_id = co.person_id
+    ")
+  }
+
+
+  # ----------------------------------------------------------------------
+  # Load configuration files
+  # ----------------------------------------------------------------------
   diagnosis_all <- fromJSON(diagnosis_config)
   stages_config <- fromJSON(stage_config)
   measurements_all <- fromJSON(measurement_config)
-  
+
   cancer_types <- names(diagnosis_all)
   cohortSql <- list()
   cohortNames <- c()
   cohortIds <- c()
   counter <- startCohortId
-  
-  # Create year expression to work for different DBMS
-
-  year_expr_template <- switch(
-  tolower(connectionDetails$dbms),
-  "postgresql" = "EXTRACT(YEAR FROM co.condition_start_date)",
-  "redshift"   = "EXTRACT(YEAR FROM co.condition_start_date)",
-  "sql server" = "YEAR(co.condition_start_date)",
-  "oracle"     = "EXTRACT(YEAR FROM co.condition_start_date)",  # Oracle supports EXTRACT
-  "pdw"        = "YEAR(co.condition_start_date)",
-  stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
-)
 
 
-  # -----------------------------
-  # Helper function to build SQL
-  # -----------------------------
+  # ----------------------------------------------------------------------
+  # Template builder for each cohort
+  # ----------------------------------------------------------------------
   createTemplate <- function(cohortId, extraJoin = "", extraWhere = "") {
+
+    year_expr <- getYearExpr(connectionDetails)
+
     glue("
       INSERT INTO @cohort_database_schema.@cohort_table
         (cohort_definition_id, subject_id, cohort_start_date, cohort_end_date)
@@ -78,167 +127,160 @@ createCancerCohorts <- function(
       JOIN @cdm_database_schema.concept_ancestor ca
         ON ca.descendant_concept_id = co.condition_concept_id
       {extraJoin}
-      WHERE ca.ancestor_concept_id IN @diagnosis_included
-        AND co.condition_concept_id NOT IN @diagnosis_excluded
-        AND pe.gender_concept_id in (@gender)
-        AND {year_expr_template} in (@year)
+      WHERE ca.ancestor_concept_id IN (@diagnosis_included)
+        AND co.condition_concept_id NOT IN (@diagnosis_excluded)
+        AND pe.gender_concept_id IN (@gender)
+        AND {year_expr} IN (@year)
         {extraWhere};
     ")
   }
-  
-  # -----------------------------
-  # Loop over all cancers
-  # -----------------------------
 
-  # Create year expression to work for different DBMS
 
-  year_expr_measurement <- switch(
-  tolower(connectionDetails$dbms),
-  "postgresql" = "EXTRACT(YEAR FROM co2.condition_start_date)",
-  "redshift"   = "EXTRACT(YEAR FROM co2.condition_start_date)",
-  "sql server" = "YEAR(co2.condition_start_date)",
-  "oracle"     = "EXTRACT(YEAR FROM co2.condition_start_date)",  # Oracle supports EXTRACT
-  "pdw"        = "YEAR(co2.condition_start_date)",
-  stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
-)
+  # ----------------------------------------------------------------------
+  # Loop over cancers
+  # ----------------------------------------------------------------------
+
   for (cancer in cancer_types) {
+
     diag <- diagnosis_all[[cancer]]
-    diagnosis_included <- if (length(diag$included) > 0)
-      paste0("(", paste(diag$included, collapse=","), ")") else "(-1)"
-    diagnosis_excluded <- if (length(diag$excluded) > 0)
-      paste0("(", paste(diag$excluded, collapse=","), ")") else "(-1)"
-    
-    # --- Base (All) cohort ---
+    diagnosis_included <- paste(diag$included, collapse = ",")
+    diagnosis_excluded <- paste(diag$excluded, collapse = ",")
+
+    # ------------------------------------------------------------------
+    # 1. Base ALL cohort
+    # ------------------------------------------------------------------
     baseName <- glue("{cancer}_all")
     cohortNames <- c(cohortNames, baseName)
-    cohortIds <- c(cohortIds, counter)
+    cohortIds   <- c(cohortIds, counter)
     cohortSql[[baseName]] <- createTemplate(counter)
     counter <- counter + 1
-    
-    # --- Stage cohorts (with hierarchical exclusions)
+
+
+    # ------------------------------------------------------------------
+    # 2. Stage cohorts
+    # ------------------------------------------------------------------
     if (all(c("general_ancestor", "pathological", "clinical") %in% names(stages_config))) {
+
       general_ancestor_stages <- stages_config$general_ancestor
-      pathological_stages <- stages_config$pathological
-      clinical_stages <- stages_config$clinical
-      
+      pathological_stages     <- stages_config$pathological
+      clinical_stages         <- stages_config$clinical
+
       for (i in seq_along(general_ancestor_stages)) {
+
         stage_label <- names(general_ancestor_stages)[i]
-        
-        general_sql <- if (length(general_ancestor_stages[[i]]) > 0)
-          paste0(paste(general_ancestor_stages[[i]], collapse = ",")) else "(-1)"
-        clinical_sql <- if (length(clinical_stages[[i]]) > 0)
-          paste0(paste(clinical_stages[[i]], collapse = ",")) else "(-1)"
-        pathological_sql <- if (length(pathological_stages[[i]]) > 0)
-          paste0(paste(pathological_stages[[i]], collapse = ",")) else "(-1)"
-        
-        extraJoin <- glue("
-          JOIN (
-            WITH included_measurements AS (
-              SELECT descendant_concept_id AS measurement_concept_id
-              FROM @cdm_database_schema.concept_ancestor
-              WHERE ancestor_concept_id IN ({general_sql})
-            ),
-            excluded_measurements AS (
-              SELECT descendant_concept_id AS measurement_concept_id
-              FROM @cdm_database_schema.concept_ancestor
-              WHERE ancestor_concept_id IN ({clinical_sql}, {pathological_sql})
-            ),
-            allowed_measurements AS (
-              SELECT measurement_concept_id
-              FROM included_measurements
-              WHERE measurement_concept_id NOT IN (SELECT measurement_concept_id FROM excluded_measurements)
-            )
-            SELECT m.person_id, m.measurement_date, m.measurement_concept_id
-            FROM @cdm_database_schema.measurement m
-            JOIN @cdm_database_schema.condition_occurrence co2
-              ON co2.person_id = m.person_id
-             AND m.measurement_event_id = co2.condition_occurrence_id
-            JOIN allowed_measurements am
-              ON am.measurement_concept_id = m.measurement_concept_id
-            WHERE {year_expr_measurement} in (@year)
-          ) m
-          ON m.person_id = co.person_id
-        ")
-        
+
+        general_sql      <- paste(general_ancestor_stages[[i]], collapse = ",")
+        clinical_sql     <- paste(clinical_stages[[i]], collapse = ",")
+        pathological_sql <- paste(pathological_stages[[i]], collapse = ",")
+
+        year_expr_measurement <- getYearExprMeasurement(connectionDetails)
+
+        stageJoin <- makeStageMeasurementJoin(year_expr_measurement, general_sql, clinical_sql, pathological_sql)
+
         extraWhere <- glue("
           AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
           AND co.condition_start_date + INTERVAL '{windowDays}' DAY
         ")
-        
+
         stageName <- glue("{cancer}_{stage_label}")
         cohortNames <- c(cohortNames, stageName)
-        cohortIds <- c(cohortIds, counter)
-        cohortSql[[stageName]] <- createTemplate(counter, extraJoin, extraWhere)
+        cohortIds   <- c(cohortIds, counter)
+
+        cohortSql[[stageName]] <- createTemplate(
+          counter,
+          extraJoin = stageJoin,
+          extraWhere = extraWhere
+        )
         counter <- counter + 1
       }
     }
-    
-    # --- Measurements (biomarkers, lab tests, etc.) ---
+
+
+    # ------------------------------------------------------------------
+    # 3. Measurement-based cohorts
+    # ------------------------------------------------------------------
     for (mName in names(measurements_all)) {
+
       mData <- measurements_all[[mName]]
       measurement_concepts <- mData$concept_id
-      categories <- setdiff(names(mData), "concept_id") # e.g. positive/negative/high/low
-      
-      # If no categories, just build one cohort for presence of measurement
+      categories <- setdiff(names(mData), "concept_id")
+
+      # --------------------------------------------------------------
+      # No categories → simple presence cohort
+      # --------------------------------------------------------------
       if (length(categories) == 0) {
-        mCohortName <- glue("{cancer}_{mName}_Any")
-        measurement_sql <- paste0("m.measurement_concept_id IN (", paste(measurement_concepts, collapse=","), ")")
-        
+
+        measurement_sql <- paste(measurement_concepts, collapse=",")
+
         extraJoin <- glue("
           INNER JOIN @cdm_database_schema.measurement m
             ON m.person_id = co.person_id
-            AND {measurement_sql}
-            AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
-            AND co.condition_start_date + INTERVAL '{windowDays}' DAY
+           AND m.measurement_concept_id IN ({measurement_sql})
+           AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
+                                    AND co.condition_start_date + INTERVAL '{windowDays}' DAY
         ")
+
+        mCohortName <- glue("{cancer}_{mName}_Any")
         cohortNames <- c(cohortNames, mCohortName)
-        cohortIds <- c(cohortIds, counter)
+        cohortIds   <- c(cohortIds, counter)
         cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
         counter <- counter + 1
+
       } else {
-        # Multiple category-based subcohorts (user-defined)
+
+        # --------------------------------------------------------------
+        # Category-specific measurement cohorts
+        # --------------------------------------------------------------
         for (cat in categories) {
-          valConcepts <- mData[[cat]]
-          measurement_sql <- paste0("m.measurement_concept_id IN (", paste(measurement_concepts, collapse=","), ")")
-          val_sql <- paste0("m.value_as_concept_id IN (", paste(valConcepts, collapse=","), ")")
-          
-          mCohortName <- glue("{cancer}_{mName}_{cat}")
+          valConcepts <- paste(mData[[cat]], collapse = ",")
+          measurement_sql <- paste(measurement_concepts, collapse = ",")
+
           extraJoin <- glue("
             INNER JOIN @cdm_database_schema.measurement m
               ON m.person_id = co.person_id
-              AND {measurement_sql}
-              AND {val_sql}
-              AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
-              AND co.condition_start_date + INTERVAL '{windowDays}' DAY
+             AND m.measurement_concept_id IN ({measurement_sql})
+             AND m.value_as_concept_id IN ({valConcepts})
+             AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
+                                      AND co.condition_start_date + INTERVAL '{windowDays}' DAY
           ")
+
+          mCohortName <- glue("{cancer}_{mName}_{cat}")
           cohortNames <- c(cohortNames, mCohortName)
-          cohortIds <- c(cohortIds, counter)
+          cohortIds   <- c(cohortIds, counter)
           cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
           counter <- counter + 1
         }
       }
     }
   }
-  
-  # -----------------------------
-  # Render all SQLs
-  # -----------------------------
-  renderedSql <- lapply(cohortSql, function(sql) {
-    SqlRender::render(
-      sql,
-      cdm_database_schema = cdmDatabaseSchema,
-      cohort_database_schema = cohortDatabaseSchema,
-      cohort_table = cohortTable,
-      year = year,
-      gender = gender,
-      diagnosis_included = diagnosis_included,
-      diagnosis_excluded = diagnosis_excluded
-    )
-  })
-  
-  # -----------------------------
+
+
+  # ----------------------------------------------------------------------
+  # Render SQL for each cohort
+  # ----------------------------------------------------------------------
+  renderedSql <- mapply(
+    FUN = function(sql, i) {
+      SqlRender::render(
+        sql,
+        cdm_database_schema = cdmDatabaseSchema,
+        cohort_database_schema = cohortDatabaseSchema,
+        cohort_table = cohortTable,
+        diagnosis_included = diagnosis_included,
+        diagnosis_excluded = diagnosis_excluded,
+        year = year,
+        gender = gender,
+        warnOnMissingParameters = FALSE
+      )
+    },
+    sql = cohortSql,
+    i = seq_along(cohortSql),
+    SIMPLIFY = FALSE
+  )
+
+
+  # ----------------------------------------------------------------------
   # Build cohort definition set
-  # -----------------------------
+  # ----------------------------------------------------------------------
   cohortDefinitionSet <- data.frame(
     cohortId = cohortIds,
     cohortName = cohortNames,
@@ -246,7 +288,8 @@ createCancerCohorts <- function(
     json = "{}",
     stringsAsFactors = FALSE
   )
-  
+
+
   list(
     cohortSql = renderedSql,
     cohortDefinitionSet = cohortDefinitionSet
