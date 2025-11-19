@@ -7,6 +7,7 @@
 #' @param cdmDatabaseSchema Character. OMOP CDM schema.
 #' @param cohortDatabaseSchema Character. Target schema for cohort table.
 #' @param cohortTable Character. Name of the cohort table.
+#' @param connectionDetails DatabaseConnector connection details object.
 #' @param year Integer. Diagnosis year.
 #' @param gender Integer. OMOP concept ID for gender.
 #' @param diagnosis_config,stage_config,measurement_config Character. JSON configuration file paths.
@@ -19,6 +20,7 @@ createCancerCohorts <- function(
     cdmDatabaseSchema,
     cohortDatabaseSchema,
     cohortTable,
+    connectionDetails,
     year,
     gender,
     diagnosis_config = "inst/settings/cancer_diagnosis.json",
@@ -45,6 +47,19 @@ createCancerCohorts <- function(
   cohortIds <- c()
   counter <- startCohortId
   
+  # Create year expression to work for different DBMS
+
+  year_expr_template <- switch(
+  tolower(connectionDetails$dbms),
+  "postgresql" = "EXTRACT(YEAR FROM co.condition_start_date)",
+  "redshift"   = "EXTRACT(YEAR FROM co.condition_start_date)",
+  "sql server" = "YEAR(co.condition_start_date)",
+  "oracle"     = "EXTRACT(YEAR FROM co.condition_start_date)",  # Oracle supports EXTRACT
+  "pdw"        = "YEAR(co.condition_start_date)",
+  stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
+)
+
+
   # -----------------------------
   # Helper function to build SQL
   # -----------------------------
@@ -66,7 +81,7 @@ createCancerCohorts <- function(
       WHERE ca.ancestor_concept_id IN @diagnosis_included
         AND co.condition_concept_id NOT IN @diagnosis_excluded
         AND pe.gender_concept_id in (@gender)
-        AND EXTRACT(YEAR FROM co.condition_start_date) in (@year)
+        AND {year_expr_template} in (@year)
         {extraWhere};
     ")
   }
@@ -74,6 +89,18 @@ createCancerCohorts <- function(
   # -----------------------------
   # Loop over all cancers
   # -----------------------------
+
+  # Create year expression to work for different DBMS
+
+  year_expr_measurement <- switch(
+  tolower(connectionDetails$dbms),
+  "postgresql" = "EXTRACT(YEAR FROM co2.condition_start_date)",
+  "redshift"   = "EXTRACT(YEAR FROM co2.condition_start_date)",
+  "sql server" = "YEAR(co2.condition_start_date)",
+  "oracle"     = "EXTRACT(YEAR FROM co2.condition_start_date)",  # Oracle supports EXTRACT
+  "pdw"        = "YEAR(co2.condition_start_date)",
+  stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
+)
   for (cancer in cancer_types) {
     diag <- diagnosis_all[[cancer]]
     diagnosis_included <- if (length(diag$included) > 0)
@@ -128,7 +155,7 @@ createCancerCohorts <- function(
              AND m.measurement_event_id = co2.condition_occurrence_id
             JOIN allowed_measurements am
               ON am.measurement_concept_id = m.measurement_concept_id
-            WHERE EXTRACT(YEAR FROM co2.condition_start_date) in (@year)
+            WHERE {year_expr_measurement} in (@year)
           ) m
           ON m.person_id = co.person_id
         ")
