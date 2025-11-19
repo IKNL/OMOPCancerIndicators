@@ -56,6 +56,22 @@ createCancerCohorts <- function(
     getYearExpr(connectionDetails, alias = "co2")
   }
 
+  # ----------------------------------------------------------------------
+  # Helper function to create interval windowdays expression for different DBMS
+  # ----------------------------------------------------------------------
+  getWindowExpr <- function(windowDays, connectionDetails) {
+    dbms <- tolower(connectionDetails$dbms)
+    if (dbms %in% c("postgresql", "redshift", "oracle")) {
+      paste0("co.condition_start_date - INTERVAL '", windowDays, "' DAY",
+            " AND co.condition_start_date + INTERVAL '", windowDays, "' DAY")
+    } else if (dbms %in% c("sql server", "pdw")) {
+      paste0("DATEADD(day, -", windowDays, ", co.condition_start_date)",
+            " AND DATEADD(day, ", windowDays, ", co.condition_start_date)")
+    } else {
+      stop("DBMS not supported for windowDays expression: ", dbms)
+    }
+  }
+
 
   # ----------------------------------------------------------------------
   # Helper function to create stage measurement join
@@ -174,12 +190,12 @@ createCancerCohorts <- function(
         pathological_sql <- paste(pathological_stages[[i]], collapse = ",")
 
         year_expr_measurement <- getYearExprMeasurement(connectionDetails)
+        interval_expr <- getWindowExpr(windowDays, connectionDetails)
 
         stageJoin <- makeStageMeasurementJoin(year_expr_measurement, general_sql, clinical_sql, pathological_sql)
 
         extraWhere <- glue("
-          AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
-          AND co.condition_start_date + INTERVAL '{windowDays}' DAY
+          AND m.measurement_date BETWEEN {interval_expr}
         ")
 
         stageName <- glue("{cancer}_{stage_label}")
