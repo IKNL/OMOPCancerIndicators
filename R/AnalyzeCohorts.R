@@ -97,19 +97,49 @@ summarizeAgeDistribution <- function(connectionDetails, cdmDatabaseSchema, cohor
   library(dplyr)
   library(SqlRender)
   library(DatabaseConnector)
+  library(glue)
   
-  sql <- "
-    SELECT c.cohort_definition_id AS cohort_id,
-           EXTRACT(YEAR FROM c.cohort_start_date) - p.year_of_birth AS age,
-           c.subject_id
+  # ------------------------------------------------------------------
+  # Create DBMS-specific age expression (cohort_start_date - birth year)
+  # ------------------------------------------------------------------
+  age_expr <- switch(
+    tolower(connectionDetails$dbms),
+    
+    # PostgreSQL / Redshift use EXTRACT or AGE()
+    "postgresql" = "EXTRACT(YEAR FROM AGE(c.cohort_start_date, p.birth_datetime))",
+    "redshift"   = "EXTRACT(YEAR FROM AGE(c.cohort_start_date, p.birth_datetime))",
+    
+    # SQL Server / PDW
+    "sql server" = "DATEDIFF(YEAR, p.birth_datetime, c.cohort_start_date)",
+    "pdw"        = "DATEDIFF(YEAR, p.birth_datetime, c.cohort_start_date)",
+    
+    # Oracle
+    "oracle"     = "FLOOR((c.cohort_start_date - p.birth_datetime) / 365.25)",
+    
+    stop("Unsupported DBMS for age calculation: ", connectionDetails$dbms)
+  )
+  
+  # ------------------------------------------------------------------
+  # SQL template using the universal age expression
+  # ------------------------------------------------------------------
+  sql <- glue("
+    SELECT 
+      c.cohort_definition_id AS cohort_id,
+      {age_expr} AS age,
+      c.subject_id
     FROM @cohortDatabaseSchema.@cohortTable c
-    JOIN @cdmDatabaseSchema.person p ON c.subject_id = p.person_id;
-  "
-  sql <- SqlRender::render(sql,
-                           cdmDatabaseSchema = cdmDatabaseSchema,
-                           cohortDatabaseSchema = cohortDatabaseSchema,
-                           cohortTable = cohortTable)
-  sql <- SqlRender::translate(sql, targetDialect = connectionDetails$dbms)
+    JOIN @cdmDatabaseSchema.person p 
+      ON c.subject_id = p.person_id;
+  ")
+  
+  # Render placeholders, translate dialect
+  sql <- SqlRender::render(
+    sql,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    cohortTable = cohortTable,
+    cdmDatabaseSchema = cdmDatabaseSchema
+  )
+  sql <- SqlRender::translate(sql,  targetDialect = connectionDetails$dbms)
   
   conn <- DatabaseConnector::connect(connectionDetails)
   on.exit(DatabaseConnector::disconnect(conn))
@@ -117,22 +147,31 @@ summarizeAgeDistribution <- function(connectionDetails, cdmDatabaseSchema, cohor
   age_data <- DatabaseConnector::querySql(conn, sql)
   names(age_data) <- tolower(names(age_data))
   
+
   age_data$age <- as.numeric(age_data$age)
   names(age_data)[names(age_data) == "cohort_id"] <- "cohortId"
   
-  age_data$ageGroup <- cut(age_data$age,
-                           breaks = seq(0, 120, by = 10),
-                           right = FALSE,
-                           labels = paste0(seq(0, 110, by = 10), "-", seq(9, 119, by = 10))
+  age_data$ageGroup <- cut(
+    age_data$age,
+    breaks = seq(0, 120, by = 10),
+    right = FALSE,
+    labels = paste0(seq(0, 110, by = 10), "-", seq(9, 119, by = 10))
   )
   
-  agg <- aggregate(subject_id ~ cohortId + ageGroup, data = age_data, FUN = function(x) length(unique(x)))
+  agg <- aggregate(subject_id ~ cohortId + ageGroup, data = age_data,
+                   FUN = function(x) length(unique(x)))
   names(agg)[names(agg) == "subject_id"] <- "n"
   
-  agg <- merge(agg, cohortDefinitionSet[, c("cohortId", "cohortName")], by = "cohortId", all.x = TRUE)
+  agg <- merge(
+    agg,
+    cohortDefinitionSet[, c("cohortId", "cohortName")],
+    by = "cohortId",
+    all.x = TRUE
+  )
   
   return(agg)
 }
+
 
 
 #' Summarize cancer stage distribution (with missing stages) for all cancers
