@@ -232,8 +232,7 @@ createCancerCohorts <- function(
           INNER JOIN @cdm_database_schema.measurement m
             ON m.person_id = co.person_id
            AND m.measurement_concept_id IN ({measurement_sql})
-           AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
-                                    AND co.condition_start_date + INTERVAL '{windowDays}' DAY
+           AND m.measurement_date BETWEEN {interval_expr}
         ")
 
         mCohortName <- glue("{cancer}_{mName}_Any")
@@ -256,8 +255,7 @@ createCancerCohorts <- function(
               ON m.person_id = co.person_id
              AND m.measurement_concept_id IN ({measurement_sql})
              AND m.value_as_concept_id IN ({valConcepts})
-             AND m.measurement_date BETWEEN co.condition_start_date - INTERVAL '{windowDays}' DAY
-                                      AND co.condition_start_date + INTERVAL '{windowDays}' DAY
+             AND m.measurement_date BETWEEN {interval_expr}
           ")
 
           mCohortName <- glue("{cancer}_{mName}_{cat}")
