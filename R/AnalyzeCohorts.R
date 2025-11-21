@@ -91,55 +91,73 @@ summarizeOverlap <- function(connectionDetails, cohortDatabaseSchema, cohortTabl
   return(results)
 }
 
-#' Summarize age distribution with 10-year bins
+#' Summarize age distribution with 10-year bins 
 #' @export
-summarizeAgeDistribution <- function(connectionDetails, cdmDatabaseSchema, cohortDatabaseSchema, cohortTable, cohortDefinitionSet) {
+summarizeAgeDistribution <- function(connectionDetails, 
+                                     cdmDatabaseSchema, 
+                                     cohortDatabaseSchema, 
+                                     cohortTable, 
+                                     cohortDefinitionSet) {
   library(dplyr)
   library(SqlRender)
   library(DatabaseConnector)
-  library(glue)
   
-  # ------------------------------------------------------------------
-  # Create DBMS-specific age expression (cohort_start_date - birth year)
-  # ------------------------------------------------------------------
-  age_expr <- switch(
-    tolower(connectionDetails$dbms),
+
+
+  # Helper function to retrieve birth date and age for different DBMS
+  getAgeExpr <- function(connectionDetails) {
+    db <- tolower(connectionDetails$dbms)
+    birth_expr <- switch(db,
+                         "postgresql" = "COALESCE(p.birth_datetime, MAKE_DATE(p.year_of_birth, COALESCE(p.month_of_birth,6), COALESCE(p.day_of_birth,15)))",
+                         "redshift"   = "COALESCE(p.birth_datetime, MAKE_DATE(p.year_of_birth, COALESCE(p.month_of_birth,6), COALESCE(p.day_of_birth,15)))",
+                         "sql server" = "COALESCE(p.birth_datetime, DATEFROMPARTS(p.year_of_birth, ISNULL(p.month_of_birth,6), ISNULL(p.day_of_birth,15)))",
+                         "pdw"        = "COALESCE(p.birth_datetime, DATEFROMPARTS(p.year_of_birth, ISNULL(p.month_of_birth,6), ISNULL(p.day_of_birth,15)))",
+                         "oracle"     = "COALESCE(p.birth_datetime, TO_DATE(p.year_of_birth || '-' || NVL(p.month_of_birth,6) || '-' || NVL(p.day_of_birth,15),'YYYY-MM-DD'))",
+                         stop("DBMS not supported for age calculation")
+    )
     
-    # PostgreSQL / Redshift use EXTRACT or AGE()
-    "postgresql" = "EXTRACT(YEAR FROM AGE(c.cohort_start_date, p.birth_datetime))",
-    "redshift"   = "EXTRACT(YEAR FROM AGE(c.cohort_start_date, p.birth_datetime))",
-    
-    # SQL Server / PDW
-    "sql server" = "DATEDIFF(YEAR, p.birth_datetime, c.cohort_start_date)",
-    "pdw"        = "DATEDIFF(YEAR, p.birth_datetime, c.cohort_start_date)",
-    
-    # Oracle
-    "oracle"     = "FLOOR((c.cohort_start_date - p.birth_datetime) / 365.25)",
-    
-    stop("Unsupported DBMS for age calculation: ", connectionDetails$dbms)
-  )
+    age_expr <- switch(db,
+                       "postgresql" = paste0("EXTRACT(YEAR FROM AGE(c.cohort_start_date, ", birth_expr, "))"),
+                       "redshift"   = paste0("EXTRACT(YEAR FROM AGE(c.cohort_start_date, ", birth_expr, "))"),
+                       "sql server" = paste0(
+                         "DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date) - ",
+                         "CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date), ", birth_expr, ") > ",
+                         cohort_alias, ".cohort_start_date THEN 1 ELSE 0 END"
+                       ),
+                       "pdw"        = paste0(
+                         "DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date) - ",
+                         "CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date), ", birth_expr, ") > ",
+                         cohort_alias, ".cohort_start_date THEN 1 ELSE 0 END"
+                       ),
+                       "oracle"     = paste0("FLOOR(MONTHS_BETWEEN(c.cohort_start_date, ", birth_expr, ")/12)")
+    )
+    return(age_expr)
+  }
   
-  # ------------------------------------------------------------------
-  # SQL template using the universal age expression
-  # ------------------------------------------------------------------
+  # Query to retrieve age from either birth date or combination of day, month and year.
+  age_expr <- getAgeExpr(connectionDetails)
+  
   sql <- glue("
     SELECT 
       c.cohort_definition_id AS cohort_id,
       {age_expr} AS age,
-      c.subject_id
+      c.subject_id,
+      p.birth_datetime,
+      p.month_of_birth,
+      p.day_of_birth
     FROM @cohortDatabaseSchema.@cohortTable c
-    JOIN @cdmDatabaseSchema.person p 
-      ON c.subject_id = p.person_id;
+    JOIN @cdmDatabaseSchema.person p
+      ON c.subject_id = p.person_id
   ")
   
-  # Render placeholders, translate dialect
+  
   sql <- SqlRender::render(
     sql,
-    cohortDatabaseSchema = cohortDatabaseSchema,
-    cohortTable = cohortTable,
-    cdmDatabaseSchema = cdmDatabaseSchema
+    cdmDatabaseSchema      = cdmDatabaseSchema,
+    cohortDatabaseSchema   = cohortDatabaseSchema,
+    cohortTable            = cohortTable
   )
-  sql <- SqlRender::translate(sql,  targetDialect = connectionDetails$dbms)
+  sql <- SqlRender::translate(sql, targetDialect = connectionDetails$dbms)
   
   conn <- DatabaseConnector::connect(connectionDetails)
   on.exit(DatabaseConnector::disconnect(conn))
@@ -147,31 +165,69 @@ summarizeAgeDistribution <- function(connectionDetails, cdmDatabaseSchema, cohor
   age_data <- DatabaseConnector::querySql(conn, sql)
   names(age_data) <- tolower(names(age_data))
   
-
+  # Check if any date values are missing
+  n_null_birth <- sum(is.na(age_data$birth_datetime))
+  n_missing_month <- sum(is.na(age_data$month_of_birth))
+  n_missing_day <- sum(is.na(age_data$day_of_birth))
+  
+  if (n_null_birth > 0) {
+    warning(sprintf(
+      "[WARN] %s persons had NULL birth_datetime → used reconstructed date",
+      format(n_null_birth, big.mark=",")
+    ))
+  }
+  
+  if (n_missing_month > 0 || n_missing_day > 0) {
+    warning(sprintf(
+      "[WARN] %s persons had missing month or day of birth → used fallback (month=6, day=15)",
+      format(n_missing_month + n_missing_day, big.mark=",")
+    ))
+  }
+  
+  # Standardize and rename
   age_data$age <- as.numeric(age_data$age)
   names(age_data)[names(age_data) == "cohort_id"] <- "cohortId"
   
+  # Check for missing cohorts 
+  existing_ids <- unique(age_data$cohortId)
+  expected_ids <- unique(cohortDefinitionSet$cohortId)
+  missing <- setdiff(expected_ids, existing_ids)
+  if (length(missing) > 0) {
+    warning(sprintf(
+      "[WARN] Cohort IDs expected but not found in cohort table: %s",
+      paste(missing, collapse = ", ")
+    ))
+  }
+  
+  # Create 10-year age bins
   age_data$ageGroup <- cut(
     age_data$age,
     breaks = seq(0, 120, by = 10),
     right = FALSE,
-    labels = paste0(seq(0, 110, by = 10), "-", seq(9, 119, by = 10))
+    labels = paste0(seq(0, 110, 10), "-", seq(9, 119, 10))
   )
   
-  agg <- aggregate(subject_id ~ cohortId + ageGroup, data = age_data,
-                   FUN = function(x) length(unique(x)))
+  # Aggregate unique subjects per cohort per age group 
+  agg <- aggregate(
+    subject_id ~ cohortId + ageGroup,
+    data = age_data,
+    FUN = function(x) length(unique(x))
+  )
   names(agg)[names(agg) == "subject_id"] <- "n"
   
+  # Add cohort names 
   agg <- merge(
-    agg,
-    cohortDefinitionSet[, c("cohortId", "cohortName")],
+    agg, 
+    cohortDefinitionSet[, c("cohortId", "cohortName")], 
     by = "cohortId",
     all.x = TRUE
   )
   
-  return(agg)
+  # Ensure that only these columns are selected
+  result <- agg[, c("cohortId", "ageGroup", "n", "cohortName")]
+  
+  return(result)
 }
-
 
 
 #' Summarize cancer stage distribution (with missing stages) for all cancers
