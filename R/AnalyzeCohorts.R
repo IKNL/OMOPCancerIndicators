@@ -117,19 +117,19 @@ summarizeAgeDistribution <- function(connectionDetails,
     )
     
     age_expr <- switch(db,
-                       "postgresql" = paste0("EXTRACT(YEAR FROM AGE(c.cohort_start_date, ", birth_expr, "))"),
-                       "redshift"   = paste0("EXTRACT(YEAR FROM AGE(c.cohort_start_date, ", birth_expr, "))"),
-                       "sql server" = paste0(
-                         "DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date) - ",
-                         "CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date), ", birth_expr, ") > ",
-                         cohort_alias, ".cohort_start_date THEN 1 ELSE 0 END"
-                       ),
-                       "pdw"        = paste0(
-                         "DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date) - ",
-                         "CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, ", birth_expr, ", c.cohort_start_date), ", birth_expr, ") > ",
-                         cohort_alias, ".cohort_start_date THEN 1 ELSE 0 END"
-                       ),
-                       "oracle"     = paste0("FLOOR(MONTHS_BETWEEN(c.cohort_start_date, ", birth_expr, ")/12)")
+                      "postgresql" = glue("EXTRACT(YEAR FROM AGE(c.cohort_start_date, {birth_expr}))"),
+                      "redshift"   = glue("EXTRACT(YEAR FROM AGE(c.cohort_start_date, {birth_expr}))"),
+                      "sql server" = glue(
+                        "DATEDIFF(YEAR, {birth_expr}, c.cohort_start_date) -
+                         CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, {birth_expr}, c.cohort_start_date), {birth_expr}) >
+                              c.cohort_start_date THEN 1 ELSE 0 END"
+                      ),
+                      "pdw"        = glue(
+                        "DATEDIFF(YEAR, {birth_expr}, c.cohort_start_date) -
+                         CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, {birth_expr}, c.cohort_start_date), {birth_expr}) >
+                              c.cohort_start_date THEN 1 ELSE 0 END"
+                      ),
+                      "oracle"     = glue("FLOOR(MONTHS_BETWEEN(c.cohort_start_date, {birth_expr})/12)")
     )
     return(age_expr)
   }
@@ -367,4 +367,5 @@ summarizeMeasurements <- function(cohortCounts, measurement_config) {
   
   return(measurement_df)
 }
+
 
