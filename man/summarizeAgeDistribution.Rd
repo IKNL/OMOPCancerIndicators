@@ -2,16 +2,18 @@
 % Please edit documentation in R/AnalyzeCohorts.R
 \name{summarizeAgeDistribution}
 \alias{summarizeAgeDistribution}
-\title{Summarize age distribution with 10-year bins}
+\title{Summarize age distribution with customizable bin size}
 \usage{
 summarizeAgeDistribution(
   connectionDetails,
   cdmDatabaseSchema,
   cohortDatabaseSchema,
   cohortTable,
-  cohortDefinitionSet
+  cohortDefinitionSet,
+  ageBinSize = 10,
+  collapseOldestAge = TRUE
 )
 }
 \description{
-Summarize age distribution with 10-year bins
+Summarize age distribution with customizable bin size
 }

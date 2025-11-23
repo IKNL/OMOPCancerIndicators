@@ -15,7 +15,9 @@ runStudy(
   diagnosis_config,
   stage_config,
   measurement_config,
-  windowDays = 30
+  windowDays = 30,
+  ageBinSize = 10,
+  collapseOldestAge = TRUE
 )
 }
 \arguments{
@@ -36,6 +38,10 @@ runStudy(
 \item{diagnosis_config, stage_config, measurement_config}{Character. JSON configuration file paths.}
 
 \item{windowDays}{Integer. Days before/after diagnosis to consider receptor or stage measurements at diagnosis. Default = 30.}
+
+\item{ageBinSize}{Integer. Size of age bins for diagnostics. Default = 10.}
+
+\item{collapseOldestAge}{Logical. Whether to collapse the oldest age bin in diagnostics. Default = TRUE.}
 }
 \value{
 None. Side effects include cohort table creation and diagnostic outputs written to disk.

@@ -11,9 +11,23 @@ runDiagnostics(
   cohortTable,
   outputFolder = "Results",
   measurement_config = "inst/settings/measurements.json",
-  cohortDefinitionSet
+  cohortDefinitionSet,
+  ageBinSize = 10,
+  collapseOldestAge = TRUE
 )
 }
+\arguments{
+\item{connectionDetails}{A DatabaseConnector connection details object.}
+
+\item{cdmDatabaseSchema}{Schema name where the OMOP CDM resides.}
+
+\item{cohortDatabaseSchema}{Schema name where the cohort tables will be written.}
+
+\item{cohortTable}{Name of the results cohort table.}
+}
+\value{
+None. Side effects include cohort table creation and diagnostic outputs written to disk.
+}
 \description{
-Run diagnostics for cohorts
+A function to run diagnostics on the generated cohorts in an OMOP CDM database.
 }
