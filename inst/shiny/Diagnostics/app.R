@@ -224,34 +224,53 @@ server <- function(input, output, session) {
   # ---- Age ----
   output$age_plot <- renderPlot({
     req(input$age_cohort)
+    
     df <- ageDistribution %>% filter(cohortName == input$age_cohort)
+    
     if (nrow(df) == 0) {
-      ggplot() + annotate("text", x = 0.5, y = 0.5, label = "No age data", size = 6) + theme_void()
+      ggplot() +
+        annotate("text", x = 0.5, y = 0.5, label = "No age data", size = 6) +
+        theme_void()
     } else {
       fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
       
-      # Ensure proper and consistent ordering of age groups
-      possible_ages <- sprintf("%d-%d", seq(0, 100, 10), seq(9, 109, 10))
-      if (!"ageGroup" %in% names(df)) stop("ageDistribution must contain 'ageGroup' column.")
-      df <- df %>% mutate(ageGroup = factor(ageGroup, levels = possible_ages, ordered = TRUE))
+      # --- Dynamic extraction of the numeric lower bound from ageGroup ---
+      df <- df %>% mutate(
+        age_lower = as.numeric(sub("[-+].*$", "", ageGroup)),
+        ageGroup = factor(ageGroup, levels = unique(ageGroup)[order(unique(age_lower))], ordered = TRUE)
+      )
       
       ggplot(df, aes(x = ageGroup, y = n, fill = db)) +
         geom_col(position = "dodge") +
         geom_text(aes(label = n), position = position_dodge(width = 0.9),
                   vjust = -0.3, size = 3.5, color = main_green) +
         scale_fill_manual(values = fill_colors) +
-        labs(x = "Age Group", y = "Count", fill = "Database",
-             title = paste("Age Distribution (OMOP vs Source):", input$age_cohort)) +
+        labs(
+          x = "Age Group", y = "Count", fill = "Database",
+          title = paste("Age Distribution (OMOP vs Source):", input$age_cohort)
+        ) +
         theme_minimal(base_size = 13) +
         theme(axis.text.x = element_text(angle = 45, hjust = 1))
     }
   })
   
+  
   output$age_table <- renderDT({
-    datatable(ageDistribution %>% filter(cohortName == input$age_cohort) %>%
-                select(Database = db, Cohort = cohortName, AgeGroup = ageGroup, Count = n),
-              options = list(pageLength = 10, scrollX = TRUE, rownames = FALSE))
+    df <- ageDistribution %>% filter(cohortName == input$age_cohort)
+    
+    df <- df %>% mutate(
+      age_lower = as.numeric(sub("[-+].*$", "", ageGroup)),
+      ageGroup = factor(ageGroup, levels = unique(ageGroup)[order(unique(age_lower))], ordered = TRUE)
+    )
+    
+    df <- df %>% arrange(ageGroup)
+    
+    datatable(
+      df %>% select(Database = db, Cohort = cohortName, AgeGroup = ageGroup, Count = n),
+      options = list(pageLength = 10, scrollX = TRUE, rownames = FALSE)
+    )
   })
+  
   
   # ---- Stage ----
   stage_breast <- reactive({
