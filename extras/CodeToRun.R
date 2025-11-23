@@ -28,7 +28,9 @@ result <- runStudy(
   diagnosis_config     = "inst/settings/cancer_diagnosis.json",
   stage_config         = "inst/settings/cancer_stages.json",
   measurement_config   = "inst/settings/measurements.json",
-  windowDays           = 30
+  windowDays           = 30,
+  ageBinSize           = 10,
+  collapseOldestAge    = FALSE
 )
 
 # Launch interactive visualization
