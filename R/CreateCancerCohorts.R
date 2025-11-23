@@ -77,9 +77,8 @@ createCancerCohorts <- function(
   # Helper function to create stage measurement join
   # ----------------------------------------------------------------------
   makeStageMeasurementJoin <- function(year_expr_measurement,
-                                       general_sql,
-                                       clinical_sql,
-                                       pathological_sql) {
+                                       included_sql,
+                                       excluded_sql) {
     glue("
       LEFT JOIN (
           SELECT 
@@ -93,11 +92,11 @@ createCancerCohorts <- function(
           JOIN (
               SELECT descendant_concept_id AS measurement_concept_id
               FROM @cdm_database_schema.concept_ancestor
-              WHERE ancestor_concept_id IN ({general_sql})
+              WHERE ancestor_concept_id IN ({included_sql})
                 AND descendant_concept_id NOT IN (
                   SELECT descendant_concept_id
                   FROM @cdm_database_schema.concept_ancestor
-                  WHERE ancestor_concept_id IN ({clinical_sql}, {pathological_sql})
+                  WHERE ancestor_concept_id IN ({excluded_sql})
                 )
           ) allowed
             ON allowed.measurement_concept_id = m.measurement_concept_id
@@ -175,24 +174,25 @@ createCancerCohorts <- function(
     # ------------------------------------------------------------------
     # 2. Stage cohorts
     # ------------------------------------------------------------------
-    if (all(c("general_ancestor", "pathological", "clinical") %in% names(stages_config))) {
+    if (all(c("included", "excluded") %in% names(stages_config))) {
 
-      general_ancestor_stages <- stages_config$general_ancestor
-      pathological_stages     <- stages_config$pathological
-      clinical_stages         <- stages_config$clinical
+      included_stages <- stages_config$included
+      excluded_stages <- stages_config$excluded
 
-      for (i in seq_along(general_ancestor_stages)) {
+      for (i in seq_along(included_stages)) {
 
-        stage_label <- names(general_ancestor_stages)[i]
+        stage_label <- names(included_stages)[i]
 
-        general_sql      <- paste(general_ancestor_stages[[i]], collapse = ",")
-        clinical_sql     <- paste(clinical_stages[[i]], collapse = ",")
-        pathological_sql <- paste(pathological_stages[[i]], collapse = ",")
+        included_sql      <- paste(included_stages[[i]], collapse = ",")
+        excluded_sql <- paste(excluded_stages[[i]], collapse = ",")
+        if (excluded_sql == "") {
+          excluded_sql <- -1 
+          }
 
         year_expr_measurement <- getYearExprMeasurement(connectionDetails)
         interval_expr <- getWindowExpr(windowDays, connectionDetails)
 
-        stageJoin <- makeStageMeasurementJoin(year_expr_measurement, general_sql, clinical_sql, pathological_sql)
+        stageJoin <- makeStageMeasurementJoin(year_expr_measurement, included_sql, excluded_sql)
 
         extraWhere <- glue("
           AND m.measurement_date BETWEEN {interval_expr}
