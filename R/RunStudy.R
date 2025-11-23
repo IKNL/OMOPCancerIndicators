@@ -20,6 +20,8 @@
 #' @param gender Integer. OMOP concept ID for gender (e.g., 8532 = female).
 #' @param diagnosis_config,stage_config,measurement_config Character. JSON configuration file paths.
 #' @param windowDays Integer. Days before/after diagnosis to consider receptor or stage measurements at diagnosis. Default = 30.
+#' @param ageBinSize Integer. Size of age bins for diagnostics. Default = 10.
+#' @param collapseOldestAge Logical. Whether to collapse the oldest age bin in diagnostics. Default = TRUE.
 #'
 #' @return None. Side effects include cohort table creation and diagnostic outputs written to disk.
 #' @export
@@ -33,7 +35,9 @@ runStudy <- function(connectionDetails,
                      diagnosis_config,
                      stage_config,
                      measurement_config,
-                     windowDays = 30) {
+                     windowDays = 30,
+                     ageBinSize = 10,
+                     collapseOldestAge = TRUE) {
 
   message("Creating cancer cohort definitions...")
   cohorts <- createCancerCohorts(
@@ -68,7 +72,9 @@ runStudy <- function(connectionDetails,
     cdmDatabaseSchema     = cdmDatabaseSchema,
     cohortDatabaseSchema  = cohortDatabaseSchema,
     cohortTable           = cohortTable,
-    cohortDefinitionSet   = cohorts$cohortDefinitionSet
+    cohortDefinitionSet   = cohorts$cohortDefinitionSet,
+    ageBinSize            = ageBinSize,
+    collapseOldestAge     = collapseOldestAge
   )
 
   # Return cohortDefinitionSet for further use

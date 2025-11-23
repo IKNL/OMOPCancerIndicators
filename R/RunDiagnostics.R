@@ -1,4 +1,13 @@
-#' Run diagnostics for cohorts
+#' @title Run diagnostics for cohorts
+#' 
+#' @description
+#' A function to run diagnostics on the generated cohorts in an OMOP CDM database.
+#' @param connectionDetails A DatabaseConnector connection details object.
+#' @param cdmDatabaseSchema Schema name where the OMOP CDM resides.
+#' @param cohortDatabaseSchema Schema name where the cohort tables will be written.
+#' @param cohortTable Name of the results cohort table.
+#'
+#' @return None. Side effects include cohort table creation and diagnostic outputs written to disk.
 #' @export
 runDiagnostics <- function(connectionDetails,
                                 cdmDatabaseSchema,
@@ -6,7 +15,9 @@ runDiagnostics <- function(connectionDetails,
                                 cohortTable,
                                 outputFolder = "Results",
                                 measurement_config = "inst/settings/measurements.json",
-                                cohortDefinitionSet) {
+                                cohortDefinitionSet,
+                                ageBinSize = 10,
+                                collapseOldestAge = TRUE) {
 
   message("▶ Summarizing cohort counts...")
   cohortCounts <- summarizeCohortCounts(connectionDetails,
@@ -19,7 +30,9 @@ runDiagnostics <- function(connectionDetails,
                                               cdmDatabaseSchema = cdmDatabaseSchema,
                                               cohortDatabaseSchema = cohortDatabaseSchema,
                                               cohortTable = cohortTable,
-                                              cohortDefinitionSet = cohortDefinitionSet)
+                                              cohortDefinitionSet = cohortDefinitionSet,
+                                              ageBinSize,
+                                              collapseOldestAge)
   message("▶ Summarizing overlaps...")
   overlaps <- summarizeOverlap( connectionDetails,
                                  cohortDatabaseSchema = cohortDatabaseSchema,
