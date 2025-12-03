@@ -19,11 +19,13 @@ runDiagnostics <- function(connectionDetails,
                                 ageBinSize = 10,
                                 collapseOldestAge = TRUE) {
 
+  lookup <- generateCohortLookup(cohortDefinitionSet)
+  
   message("▶ Summarizing cohort counts...")
   cohortCounts <- summarizeCohortCounts(connectionDetails,
                                         cohortDatabaseSchema = cohortDatabaseSchema,
                                         cohortTable = cohortTable,
-                                        cohortDefinitionSet = cohortDefinitionSet)
+                                        lookup = lookup)
 
   message("▶ Summarizing age distribution...")
   ageDistribution <- summarizeAgeDistribution(connectionDetails,
@@ -31,19 +33,21 @@ runDiagnostics <- function(connectionDetails,
                                               cohortDatabaseSchema = cohortDatabaseSchema,
                                               cohortTable = cohortTable,
                                               cohortDefinitionSet = cohortDefinitionSet,
+                                              lookup = lookup,
                                               ageBinSize,
                                               collapseOldestAge)
-  message("▶ Summarizing overlaps...")
-  overlaps <- summarizeOverlap( connectionDetails,
-                                 cohortDatabaseSchema = cohortDatabaseSchema,
-                                 cohortTable = cohortTable,
-                                 cohortDefinitionSet = cohortDefinitionSet)
   
   message("▶ Summarizing stage...")
   stage <- summarizeStageDistribution(cohortCounts)
   
   message("▶ Summarizing measurements...")
-  measurements <- summarizeMeasurements(cohortCounts, measurement_config)
+  measurements <- summarizeMeasurements(cohortCounts)
+  
+  message("▶ Summarizing overlaps...")
+  overlaps <- summarizeOverlap( connectionDetails,
+                                cohortDatabaseSchema = cohortDatabaseSchema,
+                                cohortTable = cohortTable,
+                                lookup = lookup)
 
   # Ensure output folder exists
   if (!dir.exists(outputFolder)) dir.create(outputFolder, recursive = TRUE)
@@ -51,9 +55,9 @@ runDiagnostics <- function(connectionDetails,
   # Write CSVs
   utils::write.csv(cohortCounts, file.path(outputFolder, "omop","cohortCounts_omop.csv"), row.names = FALSE)
   utils::write.csv(ageDistribution, file.path(outputFolder, "omop", "ageDistribution_omop.csv"), row.names = FALSE)
-  utils::write.csv(overlaps, file.path(outputFolder, "omop","overlaps_omop.csv"), row.names = FALSE)
   utils::write.csv(stage, file.path(outputFolder, "omop", "stage_omop.csv"), row.names = FALSE)
   utils::write.csv(measurements, file.path(outputFolder, "omop", "measurements_omop.csv"), row.names = FALSE)
+  utils::write.csv(overlaps, file.path(outputFolder, "omop","overlaps_omop.csv"), row.names = FALSE)
   
   # --- Save path for Shiny app ---
   appDir <- system.file("shiny/Diagnostics", package = "OMOPCancerIndicators")

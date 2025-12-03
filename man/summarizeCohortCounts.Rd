@@ -2,15 +2,27 @@
 % Please edit documentation in R/AnalyzeCohorts.R
 \name{summarizeCohortCounts}
 \alias{summarizeCohortCounts}
-\title{Summarize cohort counts}
+\title{Summarize cohort counts and attach cancer_type + subset via lookup}
 \usage{
 summarizeCohortCounts(
   connectionDetails,
   cohortDatabaseSchema,
   cohortTable,
-  cohortDefinitionSet
+  lookup
 )
 }
+\arguments{
+\item{connectionDetails}{DatabaseConnector connection details}
+
+\item{cohortDatabaseSchema}{target schema name}
+
+\item{cohortTable}{cohort table name}
+
+\item{cohortDefinitionSet}{data.frame with at least cohortId and cohortName}
+}
+\value{
+data.frame with cohortId, n, cohortName, cancer_type, subset, category
+}
 \description{
-Summarize cohort counts
+Summarize cohort counts and attach cancer_type + subset via lookup
 }

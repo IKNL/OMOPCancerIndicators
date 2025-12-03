@@ -30,42 +30,55 @@ if (!file.exists(pathFile)) stop("Results path file not found. Run runDiagnostic
 resultsFolder <- readLines(pathFile, warn = FALSE)
 if (!dir.exists(resultsFolder)) stop("Results folder does not exist: ", resultsFolder)
 
-# --- Load Data ---
-cohortCounts_omop <- safe_read_csv(file.path(resultsFolder, "omop","cohortCounts_omop.csv"))
-cohortCounts_source <- safe_read_csv(file.path(resultsFolder, "source", "cohortCounts_source.csv"))
-ageDistribution_omop <- safe_read_csv(file.path(resultsFolder, "omop","ageDistribution_omop.csv"))
-ageDistribution_source <- safe_read_csv(file.path(resultsFolder,"source", "ageDistribution_source.csv"))
-overlaps <- safe_read_csv(file.path(resultsFolder, "omop","overlaps_omop.csv"))
-stage_omop_df <- safe_read_csv(file.path(resultsFolder,"omop", "stage_omop.csv"))
-stage_source_df <- safe_read_csv(file.path(resultsFolder, "source","stage_source.csv"))
-receptor_omop_df <- safe_read_csv(file.path(resultsFolder,"omop", "measurements_omop.csv"))
-receptor_source_df <- safe_read_csv(file.path(resultsFolder,"source", "measurements_source.csv"))
+# Helper to add db column only when df exists
+tag_db <- function(df, dbname) {
+  if (is.null(df)) return(NULL)
+  df$db <- dbname
+  df
+}
 
-# --- Combine Source and OMOP ---
-cohortCounts_omop$db <- "OMOP"
-cohortCounts_source$db <- "Source"
-cohortCounts <- rbind(cohortCounts_omop, cohortCounts_source)
+# Helper to merge OMOP + Source even if one side is missing
+safe_bind <- function(df1, df2) {
+  if (is.null(df1) && is.null(df2)) return(data.frame())   # return empty df
+  if (is.null(df1)) return(df2)
+  if (is.null(df2)) return(df1)
+  dplyr::bind_rows(df1, df2)
+}
 
-ageDistribution_omop$db <- "OMOP"
-ageDistribution_source$db <- "Source"
-ageDistribution <- rbind(ageDistribution_omop, ageDistribution_source)
+# ---------- Load Data ----------
+cohortCounts_omop       <- tag_db(safe_read_csv(file.path(resultsFolder, "omop",   "cohortCounts_omop.csv")), "OMOP")
+cohortCounts_source     <- tag_db(safe_read_csv(file.path(resultsFolder, "source", "cohortCounts_source.csv")), "Source")
 
-stage_omop_df$db <- "OMOP"
-stage_source_df$db <- "Source"
-stage_df <- rbind(stage_omop_df, stage_source_df)
+ageDistribution_omop    <- tag_db(safe_read_csv(file.path(resultsFolder, "omop",   "ageDistribution_omop.csv")), "OMOP")
+ageDistribution_source  <- tag_db(safe_read_csv(file.path(resultsFolder, "source", "ageDistribution_source.csv")), "Source")
 
-if (!is.null(receptor_omop_df)) receptor_omop_df$db <- "OMOP"
-if (!is.null(receptor_source_df)) receptor_source_df$db <- "Source"
-receptor_df <- rbind(receptor_omop_df, receptor_source_df)
+stage_omop_df           <- tag_db(safe_read_csv(file.path(resultsFolder, "omop",   "stage_omop.csv")), "OMOP")
+stage_source_df         <- tag_db(safe_read_csv(file.path(resultsFolder, "source", "stage_source.csv")), "Source")
 
-# --- Validation ---
-if (is.null(cohortCounts)) stop("cohortCounts.csv is required.")
-if (!"cohortName" %in% names(cohortCounts)) stop("cohortCounts.csv must contain 'cohortName'.")
+receptor_omop_df        <- tag_db(safe_read_csv(file.path(resultsFolder, "omop",   "measurements_omop.csv")), "OMOP")
+receptor_source_df      <- tag_db(safe_read_csv(file.path(resultsFolder, "source", "measurements_source.csv")), "Source")
+
+overlaps_omop           <- tag_db(safe_read_csv(file.path(resultsFolder, "omop",   "overlaps_omop.csv")), "OMOP")
+overlaps_source         <- tag_db(safe_read_csv(file.path(resultsFolder, "source", "overlaps_source.csv")), "Source")
+
+# ---------- Merge Datasets ----------
+cohortCounts     <- safe_bind(cohortCounts_omop, cohortCounts_source)
+ageDistribution  <- safe_bind(ageDistribution_omop, ageDistribution_source)
+stage_df         <- safe_bind(stage_omop_df, stage_source_df)
+receptor_df      <- safe_bind(receptor_omop_df, receptor_source_df)
+overlaps         <- safe_bind(overlaps_omop, overlaps_source)
+
+# ---------- Validation ----------
+if (nrow(cohortCounts) == 0)
+  stop("No cohortCounts input available (neither OMOP nor Source found).")
+
+# ensure count column exists
 if (!"n" %in% names(cohortCounts)) {
   candidate <- grep("count|Count|person", names(cohortCounts), value = TRUE)[1]
   if (!is.na(candidate)) cohortCounts <- cohortCounts %>% rename(n = !!sym(candidate))
-  else stop("cohortCounts.csv must contain a count column 'n'.")
+  else stop("cohortCounts must contain a count column ('n' or recognizable equivalent).")
 }
+
 
 # ---------- Color Palette ----------
 main_green  <- "#004d4d"
@@ -78,13 +91,15 @@ source_color <- "#F08080"
 
 # ---------- UI ----------
 ui <- dashboardPage(
-  dashboardHeader(title = "Breast Cancer Indicators"),
+  dashboardHeader(title = "Cancer Indicators"),
   dashboardSidebar(width = 272,
                    sidebarMenu(
+                     selectInput("cancer_type", "Select Cancer Type",
+                                 choices = sort(unique(cohortCounts$cancer_type))),
                      menuItem("Overview", tabName = "overview", icon = icon("table")),
                      menuItem("Age", tabName = "age", icon = icon("chart-bar")),
                      menuItem("Stage", tabName = "stage", icon = icon("layer-group")),
-                     menuItem("Receptor", tabName = "receptor", icon = icon("vials")),
+                     menuItem("Measurements", tabName = "measurements", icon = icon("vials")),
                      menuItem("Overlaps", tabName = "overlaps", icon = icon("th"))
                    )
   ),
@@ -154,24 +169,21 @@ ui <- dashboardPage(
     "))),
     
     tabItems(
-      # Overview
       tabItem(tabName = "overview",
               fluidRow(
                 box(width = 6, title = "Cohort Counts (Table)", status = "primary", DTOutput("cohort_table")),
                 box(width = 6, title = "Cohort Counts (Bar Chart)", status = "primary", plotOutput("cohort_bar", height = "420px"))
               )
       ),
-      # Age
       tabItem(tabName = "age",
               fluidRow(
                 box(width = 4, title = "Filters", status = "info",
-                    selectInput("age_cohort", "Select Cohort", choices = unique(ageDistribution$cohortName))
+                    selectInput("age_cohort", "Select Cohort", choices = NULL)
                 ),
                 box(width = 8, title = "Age Distribution", status = "primary", plotOutput("age_plot", height = "420px"))
               ),
               fluidRow(box(width = 12, DTOutput("age_table")))
       ),
-      # Stage
       tabItem(tabName = "stage",
               fluidRow(
                 box(width = 2, title = "Display Metric", status = "info",
@@ -181,16 +193,20 @@ ui <- dashboardPage(
                 box(width = 4, title = "Stage Distribution (Table)", status = "primary", DTOutput("stage_table"))
               )
       ),
-      # Receptor
-      tabItem(tabName = "receptor",
+      tabItem(tabName = "measurements",
               fluidRow(
-                box(width = 2, title = "Display Metric", status = "info",
-                    radioButtons("receptor_metric", "Show:", choices = c("Percentage", "Count"), selected = "Percentage")
+                box(width = 3, title = "Filters", status = "info",
+                    radioButtons("measurement_metric", "Show:",
+                                 choices = c("Percentage", "Count"), selected = "Percentage"),
+                    
+                    selectInput("measurement_type", "Measurement Type",
+                                choices = c("All"), selected = "All")
                 ),
-                box(width = 10, title = "Receptor Distribution", status = "primary", plotOutput("receptor_plot", height = "420px"))
+                box(width = 9, title = "Measurement Distribution", status = "primary",
+                    plotOutput("measurement_plot", height = "450px"))
               )
       ),
-      # Overlaps
+      
       tabItem(tabName = "overlaps",
               fluidRow(
                 box(width = 12, title = "Overlap Heatmap (Counts)", status = "primary", plotOutput("overlap_heatmap", height = "600px"))
@@ -200,217 +216,293 @@ ui <- dashboardPage(
   ), skin = "blue"
 )
 
+
 # ---------- SERVER ----------
 server <- function(input, output, session) {
   
+  # --- Reactive filtered datasets based on selected cancer type ---
+  cancer_filtered <- reactive({
+    req(input$cancer_type)
+    
+    list(
+      cohortCounts = cohortCounts %>% 
+        filter(cancer_type == input$cancer_type),
+      
+      ageDistribution = ageDistribution %>% 
+        filter(cancer_type == input$cancer_type),
+      
+      stage_df = stage_df %>% 
+        filter(cancer_type == input$cancer_type),
+      
+      receptor_df = {
+        df <- receptor_df %>% filter(cancer_type == input$cancer_type)
+        if (nrow(df) == 0) NULL else df
+      },
+      
+      overlaps = overlaps %>% 
+        filter(cancer_type == input$cancer_type)
+    )
+  })
+  
+  
+  
+  stage_data <- reactive({
+    df <- cancer_filtered()$stage_df
+    req(df)
+    df$stage <- factor(df$stage, levels = c("0","1","2","3","4","N/A"))
+    df
+  })
+  
+  output$stage_plot <- renderPlot({
+    df <- stage_data()
+    if (nrow(df) == 0) {
+      ggplot() + 
+        annotate("text", x=0.5, y=0.5, label="No stage data", size=6) + 
+        theme_void()
+    } else {
+      fill_colors <- c("OMOP"=omop_color, "Source"=source_color)
+      if (input$stage_metric == "Count") {
+        ggplot(df, aes(x=stage, y=n, fill=db)) +
+          geom_col(position="dodge") +
+          geom_text(aes(label=n), position=position_dodge(0.9), vjust=-0.5, color=main_green) +
+          scale_fill_manual(values=fill_colors) +
+          labs(x="Stage", y="Count", fill="Database", title=paste("Stage Distribution:", input$cancer_type)) +
+          theme_minimal(base_size=13)
+      } else {
+        ggplot(df, aes(x=stage, y=percent, fill=db)) +
+          geom_col(position="dodge") +
+          geom_text(aes(label=percent), position=position_dodge(0.9), vjust=-0.5, color=main_green) +
+          scale_fill_manual(values=fill_colors) +
+          labs(x="Stage", y="Percentage", fill="Database", title=paste("Stage Distribution:", input$cancer_type)) +
+          theme_minimal(base_size=13)
+      }
+    }
+  })
+  
+  
+  # --- Update cohort dropdown for Age tab dynamically ---
+  observe({
+    cohorts <- unique(cancer_filtered()$ageDistribution$cohortName)
+    updateSelectInput(session, "age_cohort", choices = cohorts, selected = cohorts[1])
+  })
+  
   # ---- Overview ----
   output$cohort_table <- renderDT({
-    datatable(cohortCounts %>% arrange(desc(n)) %>% 
-                select(Database = db, Cohort = cohortName, Count = n),
+    df <- cancer_filtered()$cohortCounts %>% arrange(desc(n))
+    datatable(df %>% select(Database = db, Cohort = cohortName, Count = n),
               options = list(pageLength = 12, scrollX = TRUE, rownames = FALSE))
   })
   
   output$cohort_bar <- renderPlot({
-    df <- cohortCounts %>% arrange(n)
+    df <- cancer_filtered()$cohortCounts %>% arrange(n)
     fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
     ggplot(df, aes(x = reorder(cohortName, n), y = n, fill = db)) +
       geom_col(position = "dodge") +
       coord_flip() +
       scale_fill_manual(values = fill_colors) +
-      labs(x = "", y = "Count", fill = "Database", title = "Cohort Sizes (OMOP vs Source)") +
+      labs(x = "", y = "Count", fill = "Database", title = paste(input$cancer_type, "Cohort Sizes")) +
       theme_minimal(base_size = 13)
   })
   
   # ---- Age ----
   output$age_plot <- renderPlot({
     req(input$age_cohort)
-    
-    df <- ageDistribution %>% filter(cohortName == input$age_cohort)
-    
+    df <- cancer_filtered()$ageDistribution %>% filter(cohortName == input$age_cohort)
     if (nrow(df) == 0) {
-      ggplot() +
-        annotate("text", x = 0.5, y = 0.5, label = "No age data", size = 6) +
-        theme_void()
+      ggplot() + annotate("text", x = 0.5, y = 0.5, label = "No age data", size = 6) + theme_void()
     } else {
-      fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
-      
-      # --- Dynamic extraction of the numeric lower bound from ageGroup ---
       df <- df %>% mutate(
         age_lower = as.numeric(sub("[-+].*$", "", ageGroup)),
         ageGroup = factor(ageGroup, levels = unique(ageGroup)[order(unique(age_lower))], ordered = TRUE)
       )
-      
+      fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
       ggplot(df, aes(x = ageGroup, y = n, fill = db)) +
         geom_col(position = "dodge") +
-        geom_text(aes(label = n), position = position_dodge(width = 0.9),
-                  vjust = -0.3, size = 3.5, color = main_green) +
+        geom_text(aes(label = n), position = position_dodge(width = 0.9), vjust = -0.3, size = 3.5, color = main_green) +
         scale_fill_manual(values = fill_colors) +
-        labs(
-          x = "Age Group", y = "Count", fill = "Database",
-          title = paste("Age Distribution (OMOP vs Source):", input$age_cohort)
-        ) +
+        labs(x = "Age Group", y = "Count", fill = "Database", title = paste("Age Distribution:", input$age_cohort)) +
+        theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    }
+  })
+  
+  output$age_table <- renderDT({
+    df <- cancer_filtered()$ageDistribution %>% filter(cohortName == input$age_cohort)
+    df <- df %>% mutate(
+      age_lower = as.numeric(sub("[-+].*$", "", ageGroup)),
+      ageGroup = factor(ageGroup, levels = unique(ageGroup)[order(unique(age_lower))], ordered = TRUE)
+    ) %>% arrange(ageGroup)
+    datatable(df %>% select(Database = db, Cohort = cohortName, AgeGroup = ageGroup, Count = n),
+              options = list(pageLength = 10, scrollX = TRUE, rownames = FALSE))
+  })
+  
+  # ---- Stage ----
+  output$stage_plot <- renderPlot({
+    df <- cancer_filtered()$stage_df
+    req(df)
+    df$stage <- factor(df$stage, levels = c("0","1","2","3","4","N/A"))
+    fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
+    if (input$stage_metric == "Count") {
+      ggplot(df, aes(x = stage, y = n, fill = db)) +
+        geom_col(position = "dodge") +
+        geom_text(aes(label = n), position = position_dodge(width = 0.9), vjust = -0.5, color = main_green) +
+        scale_fill_manual(values = fill_colors) +
+        labs(x = "Stage", y = "Count", fill = "Database", title = paste(input$cancer_type, "Stage Distribution")) +
+        theme_minimal(base_size = 13)
+    } else {
+      ggplot(df, aes(x = stage, y = percent, fill = db)) +
+        geom_col(position = "dodge") +
+        geom_text(aes(label = percent), position = position_dodge(width = 0.9), vjust = -0.5, color = main_green) +
+        scale_fill_manual(values = fill_colors) +
+        labs(x = "Stage", y = "Percentage", fill = "Database", title = paste(input$cancer_type, "Stage Distribution")) +
+        theme_minimal(base_size = 13)
+    }
+  })
+  
+  output$stage_table <- renderDT({
+    df <- cancer_filtered()$stage_df
+    if (input$stage_metric == "Count") datatable(df %>% select(Database = db, Stage = stage, Count = n),
+                                                 options = list(pageLength = 12, scrollX = TRUE, rownames = FALSE))
+    else datatable(df %>% select(Database = db, Stage = stage, Percentage = percent),
+                   options = list(pageLength = 12, scrollX = TRUE, rownames = FALSE))
+  })
+  
+  # ---- Measurements ----
+  
+  observe({
+    df <- cancer_filtered()$receptor_df
+    if (is.null(df)) {
+      updateSelectInput(session, "measurement_type",
+                        choices = c("All"), selected = "All")
+    } else {
+      types <- sort(unique(df$measurement))
+      updateSelectInput(session, "measurement_type",
+                        choices = c("All", types),
+                        selected = "All")
+    }
+  })
+  
+  
+  output$measurement_plot <- renderPlot({
+    df <- cancer_filtered()$receptor_df
+    req(df)
+    
+    # --- No data available ---
+    if (nrow(df) == 0) {
+      return(ggplot() +
+               annotate("text", x = 0.5, y = 0.5,
+                        label = "No measurement data available",
+                        size = 6) +
+               theme_void())
+    }
+    
+    # --- Filter by measurement type ---
+    if (input$measurement_type != "All") {
+      df <- df %>% filter(measurement == input$measurement_type)
+      if (nrow(df) == 0) {
+        return(ggplot() +
+                 annotate("text", x = 0.5, y = 0.5,
+                          label = "No data for selected measurement",
+                          size = 6) +
+                 theme_void())
+      }
+    }
+    
+    # ---------- Color Palette Generator ----------
+    generate_color_palette <- function(combo_levels) {
+      
+      source_tag <- sapply(strsplit(combo_levels, " - "), function(x) tail(x, 1))
+      
+      unique_sources <- unique(source_tag)
+      palette <- character(length(combo_levels))
+      
+      # base palettes
+      omop_base   <- c("#B22222", "#CD5C5C", "#F4A6A6")   # reds
+      source_base <- c("#004d4d", "#007777", "#a7d7c5")  # greens
+      
+      for (src in unique_sources) {
+        idx <- which(source_tag == src)
+        n <- length(idx)
+        
+        if (grepl("omop", src, ignore.case = TRUE)) {
+          colors <- colorRampPalette(omop_base)(n)
+        } else if (grepl("source", src, ignore.case = TRUE)) {
+          colors <- colorRampPalette(source_base)(n)
+        } else {
+          colors <- grey.colors(n, start = 0.4, end = 0.8)
+        }
+        
+        palette[idx] <- colors
+      }
+      
+      names(palette) <- combo_levels
+      return(palette)
+    }
+    
+    # ---------- Grouping Logic ----------
+    # Only include meaningful grouping columns
+    potential_groups <- intersect(
+      c("value", "db", "subset"),   # expected fields
+      names(df)
+    )
+    
+    if (length(potential_groups) == 0) {
+      df$combo <- factor("All")
+    } else {
+      df$combo <- apply(df[potential_groups], 1, paste, collapse = " - ")
+      df$combo <- factor(df$combo)
+    }
+    
+    # ---------- Generate Colors ----------
+    palette <- generate_color_palette(levels(df$combo))
+    
+    # ---------- Plot ----------
+    if (input$measurement_metric == "Count") {
+      ggplot(df, aes(x = measurement, y = n, fill = combo)) +
+        geom_col(position = position_dodge(width = 0.9)) +
+        geom_text(aes(label = n),
+                  position = position_dodge(width = 0.9),
+                  vjust = -0.4, size = 3.5) +
+        scale_fill_manual(values = palette, name = "Group") +
+        labs(x = "Measurement", y = "Count",
+             title = paste(input$cancer_type, "- Measurement Distribution")) +
+        theme_minimal(base_size = 13) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      
+    } else {
+      ggplot(df, aes(x = measurement, y = percent, fill = combo)) +
+        geom_col(position = position_dodge(width = 0.9)) +
+        geom_text(aes(label = sprintf("%.1f%%", percent)),
+                  position = position_dodge(width = 0.9),
+                  vjust = -0.4, size = 3.5) +
+        scale_fill_manual(values = palette, name = "Group") +
+        labs(x = "Measurement", y = "Percentage",
+             title = paste(input$cancer_type, "- Measurement Distribution")) +
         theme_minimal(base_size = 13) +
         theme(axis.text.x = element_text(angle = 45, hjust = 1))
     }
   })
   
   
-  output$age_table <- renderDT({
-    df <- ageDistribution %>% filter(cohortName == input$age_cohort)
-    
-    df <- df %>% mutate(
-      age_lower = as.numeric(sub("[-+].*$", "", ageGroup)),
-      ageGroup = factor(ageGroup, levels = unique(ageGroup)[order(unique(age_lower))], ordered = TRUE)
-    )
-    
-    df <- df %>% arrange(ageGroup)
-    
-    datatable(
-      df %>% select(Database = db, Cohort = cohortName, AgeGroup = ageGroup, Count = n),
-      options = list(pageLength = 10, scrollX = TRUE, rownames = FALSE)
-    )
-  })
-  
-  
-  # ---- Stage ----
-  stage_breast <- reactive({
-    req(stage_df)
-    df <- stage_df %>% select(stage, n, percent, db)
-    df
-  })
-  
-  output$stage_plot <- renderPlot({
-    df <- stage_breast()
-    df$stage <- factor(df$stage, levels = c("0", "1", "2", "3", "4", "N/A"))
-    fill_colors <- c("OMOP" = omop_color, "Source" = source_color)
-    
-    if (input$stage_metric == "Count") {
-      ggplot(df, aes(x = stage, y = n, fill = db)) +
-        geom_col(position = "dodge") +
-        geom_text(aes(label = n), position = position_dodge(width = 0.9),
-                  vjust = -0.5, color = main_green) +
-        scale_fill_manual(values = fill_colors) +
-        labs(x = "Stage", y = "Count", fill = "Database", title = "Stage Distribution") +
-        theme_minimal(base_size = 13)
-    } else {
-      ggplot(df, aes(x = stage, y = percent, fill = db)) +
-        geom_col(position = "dodge") +
-        geom_text(aes(label = percent), position = position_dodge(width = 0.9),
-                  vjust = -0.5, color = main_green) +
-        scale_fill_manual(values = fill_colors) +
-        labs(x = "Stage", y = "Percentage", fill = "Database", title = "Stage Distribution") +
-        theme_minimal(base_size = 13)
-    }
-  })
-  
-  output$stage_table <- renderDT({
-    df <- stage_breast()
-    if (input$stage_metric == "Count") datatable(df %>% select(Database = db, Stage = stage, Count = n), 
-                                                 options = list(pageLength = 12, scrollX = TRUE, rownames = FALSE))
-    else datatable(df %>% select(Database = db, Stage = stage, Percentage = percent), 
-                   options = list(pageLength = 12, scrollX = TRUE, rownames = FALSE))
-  })
-  
-  # ---- Receptor ----
-  output$receptor_plot <- renderPlot({
-    req(receptor_df)
-    
-    if (nrow(receptor_df) == 0) {
-      ggplot() + 
-        annotate("text", x = 0.5, y = 0.5, label = "No receptor data", size = 6) + 
-        theme_void()
-    } else {
-      df <- receptor_df
-      df$receptor <- factor(df$receptor, levels = c("HER2", "ER", "PR", "Not available"))
-      df$status <- factor(df$status, levels = c("Positive", "Negative", "Unknown"))
-      df$db <- factor(df$db, levels = c("OMOP", "Source"))
-      
-      # Define ordered combo for bar order
-      df$combo <- factor(
-        paste0(df$status, "-", df$db),
-        levels = c(
-          "Positive-OMOP", "Negative-OMOP", "Unknown-OMOP",
-          "Positive-Source", "Negative-Source", "Unknown-Source"
-        )
-      )
-      
-      # Define colors
-      fill_map <- c(
-        "Positive-OMOP"   = "#B22222",
-        "Negative-OMOP"   = "#CD5C5C",
-        "Unknown-OMOP"    = "#F4A6A6",
-        "Positive-Source" = "#004d4d",
-        "Negative-Source" = "#007777",
-        "Unknown-Source"  = "#a7d7c5"
-      )
-      
-      # Legend labels
-      legend_labels <- c(
-        "Positive-OMOP"   = "OMOP: Positive",
-        "Negative-OMOP"   = "OMOP: Negative",
-        "Unknown-OMOP"    = "OMOP: Unknown",
-        "Positive-Source" = "Source: Positive",
-        "Negative-Source" = "Source: Negative",
-        "Unknown-Source"  = "Source: Unknown"
-      )
-      
-      if (input$receptor_metric == "Count") {
-        ggplot(df, aes(x = receptor, y = n, fill = combo)) +
-          geom_col(position = position_dodge(width = 0.9)) +
-          geom_text(aes(label = n), 
-                    position = position_dodge(width = 0.9), 
-                    vjust = -0.4, size = 3.5, color = "black") +
-          scale_fill_manual(
-            values = fill_map,
-            labels = legend_labels,
-            name = "Database / Status"
-          ) +
-          labs(x = "Receptor", y = "Count",
-               title = "Receptor Positivity by Database and Status") +
-          theme_minimal(base_size = 13) +
-          theme(axis.text.x = element_text(angle = 45, hjust = 1))
-      } else {
-        ggplot(df, aes(x = receptor, y = percent, fill = combo)) +
-          geom_col(position = position_dodge(width = 0.9)) +
-          geom_text(aes(label = sprintf("%.1f%%", percent)), 
-                    position = position_dodge(width = 0.9), 
-                    vjust = -0.4, size = 3.5, color = "black") +
-          scale_fill_manual(
-            values = fill_map,
-            labels = legend_labels,
-            name = "Database / Status"
-          ) +
-          labs(x = "Receptor", y = "Percentage (%)",
-               title = "Receptor Positivity by Database and Status") +
-          theme_minimal(base_size = 13) +
-          theme(axis.text.x = element_text(angle = 45, hjust = 1))
-      }
-    }
-  })
-  
-  
-  
   # ---- Overlaps ----
   output$overlap_heatmap <- renderPlot({
-    req(overlaps)
-    cohorts <- sort(unique(c(overlaps$cohortName1, overlaps$cohortName2)))
-    all_pairs <- expand.grid(cohortName1 = cohorts, cohortName2 = cohorts, stringsAsFactors = FALSE)
-    mat_df <- overlaps %>%
+    df <- cancer_filtered()$overlaps
+    req(df)
+    cohorts <- sort(unique(c(df$cohortName1, df$cohortName2)))
+    all_pairs <- expand.grid(cohortName1=cohorts, cohortName2=cohorts, stringsAsFactors = FALSE)
+    mat_df <- df %>%
       group_by(cohortName1, cohortName2) %>%
-      summarise(n = sum(n, na.rm = TRUE), .groups = "drop") %>%
-      right_join(all_pairs, by = c("cohortName1", "cohortName2")) %>%
-      mutate(n = ifelse(is.na(n), 0, n),
-             diagonal = cohortName1 == cohortName2)
-    
-    ggplot(mat_df, aes(x = cohortName1, y = cohortName2, fill = n)) +
-      geom_tile(data = subset(mat_df, !diagonal), color = "grey") +
-      geom_tile(data = subset(mat_df, diagonal), fill = "black") +
-      scale_fill_gradient(low = "white", high = mid_green) +
-      theme_minimal(base_size = 12) +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-      labs(x = "Cohort 1", y = "Cohort 2", fill = "Count", title = "Cohort Overlap Heatmap")
+      summarise(n=sum(n, na.rm=TRUE), .groups="drop") %>%
+      right_join(all_pairs, by=c("cohortName1","cohortName2")) %>%
+      mutate(n=ifelse(is.na(n),0,n), diagonal=cohortName1==cohortName2)
+    ggplot(mat_df, aes(x=cohortName1, y=cohortName2, fill=n)) +
+      geom_tile(data=subset(mat_df,!diagonal), color="grey") +
+      geom_tile(data=subset(mat_df,diagonal), fill="black") +
+      scale_fill_gradient(low="white", high=mid_green) +
+      theme_minimal(base_size=12) + theme(axis.text.x=element_text(angle=45,hjust=1)) +
+      labs(x="Cohort 1", y="Cohort 2", fill="Count", title=paste(input$cancer_type,"Cohort Overlap"))
   })
 }
+
 
 # ---------- RUN APP ----------
 shinyApp(ui = ui, server = server)

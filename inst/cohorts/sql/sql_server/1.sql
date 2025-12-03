@@ -1,4 +1,4 @@
-  INSERT INTO results.PBCR_breast_cancer_cohorts
+  INSERT INTO results.PBCR
     (cohort_definition_id, subject_id, cohort_start_date, cohort_end_date)
   SELECT DISTINCT
     1 AS cohort_definition_id,

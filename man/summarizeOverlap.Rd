@@ -4,12 +4,7 @@
 \alias{summarizeOverlap}
 \title{Summarize pairwise overlaps between cohorts}
 \usage{
-summarizeOverlap(
-  connectionDetails,
-  cohortDatabaseSchema,
-  cohortTable,
-  cohortDefinitionSet
-)
+summarizeOverlap(connectionDetails, cohortDatabaseSchema, cohortTable, lookup)
 }
 \description{
 Summarize pairwise overlaps between cohorts

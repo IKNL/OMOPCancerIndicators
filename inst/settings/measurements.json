@@ -2,17 +2,27 @@
   "ER": {
     "concept_id": [35917793, 35918406],
     "Positive": [35935003, 35919678],
-    "Negative": [35930764,35919055]
+    "Negative": [35930764,35919055],
+    "applies_to": ["Breast"]
   },
     "PR": {
     "concept_id": [35918289],
     "Positive": [35919362],
-    "Negative": [35919700]
+    "Negative": [35919700],
+    "applies_to": ["Breast"]
   },
     "HER2": {
     "concept_id": [35918829],
     "Positive": [35919703],
-    "Negative": [35919593]
+    "Negative": [35919593],
+    "applies_to": ["Breast"]
+  },
+  "BRCA_mutation": {
+    "BRCA1": [4135410],
+    "BRCA2": [4135411],
+    "No_BRCA1": [4136450],
+    "No_BRCA2": [4133516],
+    "applies_to": ["Ovary"]
   }
 }
 

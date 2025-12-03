@@ -12,7 +12,7 @@ connectionDetails <- DatabaseConnector::createConnectionDetails(
 )
 
 # Define database details (modify if needed)
-cohortTable           <- "PBCR_breast_cancer_cohorts"
+cohortTable           <- "PBCR_cancer_cohorts"
 cdmDatabaseSchema     <- Sys.getenv("CDM_SCHEMA")
 cohortDatabaseSchema  <- Sys.getenv("RESULTS_SCHEMA")
 
@@ -24,13 +24,13 @@ result <- runStudy(
   cohortTable          = cohortTable,
   outputFolder         = outputFolder,
   year                 = 2019,
-  gender               = 8532, # females only
+  gender               = c(8532), # females only
   diagnosis_config     = "inst/settings/cancer_diagnosis.json",
   stage_config         = "inst/settings/cancer_stages.json",
   measurement_config   = "inst/settings/measurements.json",
-  windowDays           = 30,
-  ageBinSize           = 10,
-  collapseOldestAge    = FALSE
+  windowDays           = 30,    # Number of days before and after diagnosis to look for measurements
+  ageBinSize           = 10,    # set the size of age bins (e.g. 10 for 0-9, 10-19, etc. or 5 for 0-4, 5-9, etc.)
+  collapseOldestAge    = FALSE  # set to TRUE to combine all ages above 85+
 )
 
 # Launch interactive visualization

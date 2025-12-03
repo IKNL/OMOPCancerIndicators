@@ -10,6 +10,7 @@ summarizeAgeDistribution(
   cohortDatabaseSchema,
   cohortTable,
   cohortDefinitionSet,
+  lookup,
   ageBinSize = 10,
   collapseOldestAge = TRUE
 )

@@ -11,3 +11,13 @@ cohort_id,cohort_name
 10,Breast_PR_Negative
 11,Breast_HER2_Positive
 12,Breast_HER2_Negative
+13,Ovary_all
+14,Ovary_stage0
+15,Ovary_stage1
+16,Ovary_stage2
+17,Ovary_stage3
+18,Ovary_stage4
+19,Ovary_BRCA_mutation_BRCA1
+20,Ovary_BRCA_mutation_BRCA2
+21,Ovary_BRCA_mutation_No_BRCA1
+22,Ovary_BRCA_mutation_No_BRCA2
