@@ -34,10 +34,11 @@ createCancerCohorts <- function(
   library(CohortGenerator)
   library(jsonlite)
   library(glue)
-
-  # ----------------------------------------------------------------------
-  # Helper function to create YEAR() expression for different DBMS
-  # ----------------------------------------------------------------------
+  library(DatabaseConnector)
+  
+  # ---------------------
+  # DBMS helpers
+  # ---------------------
   getYearExpr <- function(connectionDetails, alias = "co") {
     expr <- switch(
       tolower(connectionDetails$dbms),
@@ -46,33 +47,32 @@ createCancerCohorts <- function(
       "sql server" = "YEAR({alias}.condition_start_date)",
       "pdw"        = "YEAR({alias}.condition_start_date)",
       "oracle"     = "EXTRACT(YEAR FROM {alias}.condition_start_date)",
-      stop("DBMS not supported for year extraction: ", connectionDetails$dbms)
+      stop("Unsupported DBMS: ", connectionDetails$dbms)
     )
     gsub("\\{alias\\}", alias, expr)
   }
+  
 
   # For measurement join referencing co2.*
   getYearExprMeasurement <- function(connectionDetails) {
     getYearExpr(connectionDetails, alias = "co2")
   }
 
-  # ----------------------------------------------------------------------
-  # Helper function to create interval windowdays expression for different DBMS
-  # ----------------------------------------------------------------------
-  getWindowExpr <- function(windowDays, connectionDetails) {
+
+  getWindowExpr <- function(windowDays, connectionDetails, alias = "co") {
     dbms <- tolower(connectionDetails$dbms)
     if (dbms %in% c("postgresql", "redshift", "oracle")) {
-      paste0("co.condition_start_date - INTERVAL '", windowDays, "' DAY",
-            " AND co.condition_start_date + INTERVAL '", windowDays, "' DAY")
+      paste0(alias, ".condition_start_date - INTERVAL '", windowDays, "' DAY AND ",
+             alias, ".condition_start_date + INTERVAL '", windowDays, "' DAY")
     } else if (dbms %in% c("sql server", "pdw")) {
-      paste0("DATEADD(day, -", windowDays, ", co.condition_start_date)",
-            " AND DATEADD(day, ", windowDays, ", co.condition_start_date)")
+      paste0("DATEADD(day, -", windowDays, ", ", alias, ".condition_start_date) AND ",
+             "DATEADD(day, ", windowDays, ", ", alias, ".condition_start_date)")
     } else {
-      stop("DBMS not supported for windowDays expression: ", dbms)
+      stop("Unsupported DBMS: ", dbms)
     }
   }
-
-
+  
+  
   # ----------------------------------------------------------------------
   # Helper function to create stage measurement join
   # ----------------------------------------------------------------------
@@ -105,29 +105,30 @@ createCancerCohorts <- function(
         ON m.person_id = co.person_id
     ")
   }
-
-
-  # ----------------------------------------------------------------------
-  # Load configuration files
-  # ----------------------------------------------------------------------
+  
+  
+  
+  # ---------------------
+  # Load JSON configs
+  # ---------------------
   diagnosis_all <- fromJSON(diagnosis_config)
-  stages_config <- fromJSON(stage_config)
-  measurements_all <- fromJSON(measurement_config)
-
+  stage_all     <- fromJSON(stage_config)
+  measurement_all <- fromJSON(measurement_config)
+  
   cancer_types <- names(diagnosis_all)
+  
   cohortSql <- list()
   cohortNames <- c()
   cohortIds <- c()
   counter <- startCohortId
-
-
-  # ----------------------------------------------------------------------
-  # Template builder for each cohort
-  # ----------------------------------------------------------------------
+  perCohort_params <- list()
+  
+  # ---------------------
+  # Template for cohort creation
+  # ---------------------
   createTemplate <- function(cohortId, extraJoin = "", extraWhere = "") {
-
     year_expr <- getYearExpr(connectionDetails)
-
+    
     glue("
       INSERT INTO @cohort_database_schema.@cohort_table
         (cohort_definition_id, subject_id, cohort_start_date, cohort_end_date)
@@ -149,152 +150,165 @@ createCancerCohorts <- function(
         {extraWhere};
     ")
   }
-
-
-  # ----------------------------------------------------------------------
-  # Loop over cancers
-  # ----------------------------------------------------------------------
-
+  
+  # ---------------------
+  # Loop through cancers
+  # ---------------------
   for (cancer in cancer_types) {
-
     diag <- diagnosis_all[[cancer]]
-    diagnosis_included <- paste(diag$included, collapse = ",")
-    diagnosis_excluded <- paste(diag$excluded, collapse = ",")
-
-    # ------------------------------------------------------------------
-    # 1. Base ALL cohort
-    # ------------------------------------------------------------------
+    diag_included <- paste(diag$included, collapse = ",")
+    diag_excluded <- ifelse(length(diag$excluded) == 0, "-1", paste(diag$excluded, collapse = ","))
+    interval_expr <- getWindowExpr(windowDays, connectionDetails)
+    year_expr_measurement <- getYearExprMeasurement(connectionDetails)
+    
+    # -------------------
+    # 1. Base ALL-cohort
+    # -------------------
     baseName <- glue("{cancer}_all")
     cohortNames <- c(cohortNames, baseName)
     cohortIds   <- c(cohortIds, counter)
+    
     cohortSql[[baseName]] <- createTemplate(counter)
+    perCohort_params[[baseName]] <- list(diagnosis_included = diag_included,
+                                         diagnosis_excluded = diag_excluded)
     counter <- counter + 1
-
-
-    # ------------------------------------------------------------------
+    
+    # -------------------
     # 2. Stage cohorts
-    # ------------------------------------------------------------------
-    if (all(c("included", "excluded") %in% names(stages_config))) {
+    # -------------------
+    for (stageName in names(stage_all)) {
+      stageDef <- stage_all[[stageName]]
+      
+      if (!is.null(stageDef$applies_to) && !(cancer %in% stageDef$applies_to)) next
+      
+      for (stage_label in names(stageDef$included)) {
+        included_stage <- paste(stageDef$included[[stage_label]], collapse = ",")
+        excluded_stage <- ifelse(length(stageDef$excluded[[stage_label]])==0, "-1",
+                                 paste(stageDef$excluded[[stage_label]], collapse = ","))
 
-      included_stages <- stages_config$included
-      excluded_stages <- stages_config$excluded
-
-      for (i in seq_along(included_stages)) {
-
-        stage_label <- names(included_stages)[i]
-
-        included_sql      <- paste(included_stages[[i]], collapse = ",")
-        excluded_sql <- paste(excluded_stages[[i]], collapse = ",")
-        if (excluded_sql == "") {
-          excluded_sql <- -1 
-          }
-
-        year_expr_measurement <- getYearExprMeasurement(connectionDetails)
-        interval_expr <- getWindowExpr(windowDays, connectionDetails)
-
-        stageJoin <- makeStageMeasurementJoin(year_expr_measurement, included_sql, excluded_sql)
-
-        extraWhere <- glue("
-          AND m.measurement_date BETWEEN {interval_expr}
-        ")
-
-        stageName <- glue("{cancer}_{stage_label}")
-        cohortNames <- c(cohortNames, stageName)
+        
+        stageJoin <- makeStageMeasurementJoin(year_expr_measurement, included_stage, excluded_stage)
+        
+        extraWhere <- glue("AND m.measurement_date BETWEEN {interval_expr}")
+        
+        stageCohortName <- glue("{cancer}_{stage_label}")
+        cohortNames <- c(cohortNames, stageCohortName)
         cohortIds   <- c(cohortIds, counter)
-
-        cohortSql[[stageName]] <- createTemplate(
-          counter,
-          extraJoin = stageJoin,
-          extraWhere = extraWhere
-        )
+        
+        cohortSql[[stageCohortName]] <- createTemplate(counter,
+                                                       extraJoin = stageJoin,
+                                                       extraWhere = extraWhere)
+        perCohort_params[[stageCohortName]] <- list(diagnosis_included = diag_included,
+                                                    diagnosis_excluded = diag_excluded)
         counter <- counter + 1
       }
     }
+    
+    # -------------------
+    # 3. Measurement cohorts
+    # -------------------
+    for (mName in names(measurement_all)) {
+      mData <- measurement_all[[mName]]
+      if (!is.null(mData$applies_to) && !(cancer %in% mData$applies_to)) next
+      
+      hasConceptId <- "concept_id" %in% names(mData)
 
 
-    # ------------------------------------------------------------------
-    # 3. Measurement-based cohorts
-    # ------------------------------------------------------------------
-    for (mName in names(measurements_all)) {
+      # CASE 1: measurement has type concept + values 
+      # ----------------------------
+      if (hasConceptId) {
+        measurement_concepts <- paste(mData$concept_id, collapse = ",")
+        categories <- setdiff(names(mData), c("concept_id", "applies_to"))
 
-      mData <- measurements_all[[mName]]
-      measurement_concepts <- mData$concept_id
-      categories <- setdiff(names(mData), "concept_id")
+        # No categories = “Any”
+        if (length(categories) == 0) {
+          extraJoin <- glue("
+            INNER JOIN @cdm_database_schema.measurement m
+              ON m.person_id = co.person_id
+            AND m.measurement_concept_id IN ({measurement_concepts})
+            AND m.measurement_date BETWEEN {interval_expr}
+          ")
 
-      # --------------------------------------------------------------
-      # No categories → simple presence cohort
-      # --------------------------------------------------------------
-      if (length(categories) == 0) {
+          mCohortName <- glue("{cancer}_{mName}_Any")
+          cohortNames <- c(cohortNames, mCohortName)
+          cohortIds   <- c(cohortIds, counter)
+          cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
+          perCohort_params[[mCohortName]] <- list(diagnosis_included = diag_included,
+                                                  diagnosis_excluded = diag_excluded)
+          counter <- counter + 1
 
-        measurement_sql <- paste(measurement_concepts, collapse=",")
+        } else {
+          # Categories = values (Positive, Negative, etc.)
+          for (cat in categories) {
+            valConcepts <- paste(mData[[cat]], collapse = ",")
+            extraJoin <- glue("
+              INNER JOIN @cdm_database_schema.measurement m
+                ON m.person_id = co.person_id
+              AND m.measurement_concept_id IN ({measurement_concepts})
+              AND m.value_as_concept_id IN ({valConcepts})
+              AND m.measurement_date BETWEEN {interval_expr}
+            ")
 
-        extraJoin <- glue("
-          INNER JOIN @cdm_database_schema.measurement m
-            ON m.person_id = co.person_id
-           AND m.measurement_concept_id IN ({measurement_sql})
-           AND m.measurement_date BETWEEN {interval_expr}
-        ")
+            mCohortName <- glue("{cancer}_{mName}_{cat}")
+            cohortNames <- c(cohortNames, mCohortName)
+            cohortIds   <- c(cohortIds, counter)
+            cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
+            perCohort_params[[mCohortName]] <- list(diagnosis_included = diag_included,
+                                                    diagnosis_excluded = diag_excluded)
+            counter <- counter + 1
+          }
+        }
 
-        mCohortName <- glue("{cancer}_{mName}_Any")
-        cohortNames <- c(cohortNames, mCohortName)
-        cohortIds   <- c(cohortIds, counter)
-        cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
-        counter <- counter + 1
 
+      # CASE 2: NO concept_id field - keys ARE measurement concepts
+      # ----------------------------
       } else {
+        categories <- setdiff(names(mData), "applies_to")
 
-        # --------------------------------------------------------------
-        # Category-specific measurement cohorts
-        # --------------------------------------------------------------
         for (cat in categories) {
-          valConcepts <- paste(mData[[cat]], collapse = ",")
-          measurement_sql <- paste(measurement_concepts, collapse = ",")
+          measurementConcepts <- paste(mData[[cat]], collapse = ",")
 
           extraJoin <- glue("
             INNER JOIN @cdm_database_schema.measurement m
               ON m.person_id = co.person_id
-             AND m.measurement_concept_id IN ({measurement_sql})
-             AND m.value_as_concept_id IN ({valConcepts})
-             AND m.measurement_date BETWEEN {interval_expr}
+            AND m.measurement_concept_id IN ({measurementConcepts})
+            AND m.measurement_date BETWEEN {interval_expr}
           ")
 
           mCohortName <- glue("{cancer}_{mName}_{cat}")
           cohortNames <- c(cohortNames, mCohortName)
           cohortIds   <- c(cohortIds, counter)
           cohortSql[[mCohortName]] <- createTemplate(counter, extraJoin)
+          perCohort_params[[mCohortName]] <- list(diagnosis_included = diag_included,
+                                                  diagnosis_excluded = diag_excluded)
           counter <- counter + 1
         }
       }
     }
+
   }
-
-
-  # ----------------------------------------------------------------------
-  # Render SQL for each cohort
-  # ----------------------------------------------------------------------
-  renderedSql <- mapply(
-    FUN = function(sql, i) {
-      SqlRender::render(
-        sql,
-        cdm_database_schema = cdmDatabaseSchema,
-        cohort_database_schema = cohortDatabaseSchema,
-        cohort_table = cohortTable,
-        diagnosis_included = diagnosis_included,
-        diagnosis_excluded = diagnosis_excluded,
-        year = year,
-        gender = gender,
-        warnOnMissingParameters = FALSE
-      )
-    },
-    sql = cohortSql,
-    i = seq_along(cohortSql),
-    SIMPLIFY = FALSE
-  )
-
-
-  # ----------------------------------------------------------------------
-  # Build cohort definition set
-  # ----------------------------------------------------------------------
+  
+  # -------------------
+  # Render SQL
+  # -------------------
+  renderedSql <- list()
+  for (nm in names(cohortSql)) {
+    renderedSql[[nm]] <- SqlRender::render(
+      cohortSql[[nm]],
+      cdm_database_schema = cdmDatabaseSchema,
+      cohort_database_schema = cohortDatabaseSchema,
+      cohort_table = cohortTable,
+      diagnosis_included = perCohort_params[[nm]]$diagnosis_included,
+      diagnosis_excluded = perCohort_params[[nm]]$diagnosis_excluded,
+      year = year,
+      gender = gender,
+      warnOnMissingParameters = FALSE
+    )
+  }
+  
+  # -------------------
+  # Cohort definition set
+  # -------------------
   cohortDefinitionSet <- data.frame(
     cohortId = cohortIds,
     cohortName = cohortNames,
@@ -302,8 +316,10 @@ createCancerCohorts <- function(
     json = "{}",
     stringsAsFactors = FALSE
   )
-
-
+  
+  # -------------------
+  # Return
+  # -------------------
   list(
     cohortSql = renderedSql,
     cohortDefinitionSet = cohortDefinitionSet

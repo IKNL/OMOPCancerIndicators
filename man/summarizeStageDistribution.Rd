@@ -2,10 +2,10 @@
 % Please edit documentation in R/AnalyzeCohorts.R
 \name{summarizeStageDistribution}
 \alias{summarizeStageDistribution}
-\title{Summarize cancer stage distribution (with missing stages) for all cancers}
+\title{Summarize stage distribution from CohortCounts}
 \usage{
-summarizeStageDistribution(cohortCounts)
+summarizeStageDistribution(CohortCounts)
 }
 \description{
-Summarize cancer stage distribution (with missing stages) for all cancers
+Summarize stage distribution from CohortCounts
 }

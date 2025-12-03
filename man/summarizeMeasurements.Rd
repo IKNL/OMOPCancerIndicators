@@ -2,15 +2,10 @@
 % Please edit documentation in R/AnalyzeCohorts.R
 \name{summarizeMeasurements}
 \alias{summarizeMeasurements}
-\title{Summarize measurement/receptor positivity (including Unknown) for all cancers}
+\title{Summarize measurements from CohortCounts}
 \usage{
-summarizeMeasurements(cohortCounts, measurement_config)
-}
-\arguments{
-\item{cohortCounts}{Data frame returned from summarizeCohortCounts}
-
-\item{measurement_config}{Path to measurement JSON file}
+summarizeMeasurements(CohortCounts)
 }
 \description{
-Summarize measurement/receptor positivity (including Unknown) for all cancers
+Summarize measurements from CohortCounts
 }
