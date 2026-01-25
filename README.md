@@ -231,6 +231,8 @@ The main outputs saved in the Results/ folder.
 
 The results can be visualized using the Shiny app. 
 
+![alt text](img/Shiny_app_example.jpg)
+
 
 ## License
 
